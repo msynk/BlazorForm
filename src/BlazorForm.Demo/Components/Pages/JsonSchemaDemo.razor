@@ -1,0 +1,91 @@
+@page "/json-schema"
+@rendermode InteractiveServer
+
+<PageTitle>JSON Schema</PageTitle>
+
+<div class="demo-intro">
+    <h1>JSON Schema</h1>
+    <p>Edit the JSON Schema on the left and the form regenerates on the right — no compiled model required. BlazorForm also exports any form back to JSON Schema.</p>
+</div>
+
+<div class="demo-split">
+    <div>
+        <textarea @bind="_json" @bind:event="oninput"></textarea>
+        <div style="margin-top:.75rem; display:flex; gap:.5rem">
+            <button class="ff-btn ff-btn--primary" @onclick="Rebuild">Apply schema</button>
+            <button class="ff-btn" @onclick="ExportRoundTrip">Export (round-trip)</button>
+        </div>
+        @if (_error is not null)
+        {
+            <p style="color:#dc2626; font-size:.85rem">@_error</p>
+        }
+    </div>
+
+    <div class="demo-card">
+        @if (_schema is not null)
+        {
+            <BlazorFormView @key="_version" Definition="_schema" Data="_data" OnValidSubmit="HandleSubmit" SubmitText="Submit" />
+        }
+    </div>
+</div>
+
+@if (_submitted)
+{
+    <div class="demo-result"><strong>Submitted values ✓</strong> <pre>@_resultJson</pre></div>
+}
+
+@code {
+    private FormDefinition? _schema;
+    private Dictionary<string, object?> _data = new();
+    private int _version;
+    private string? _error;
+    private bool _submitted;
+    private string _resultJson = "";
+
+    private string _json = """
+    {
+      "title": "Event registration",
+      "type": "object",
+      "required": ["name", "email", "ticket"],
+      "properties": {
+        "name":    { "type": "string", "title": "Full name", "minLength": 2 },
+        "email":   { "type": "string", "format": "email", "title": "Email" },
+        "ticket":  { "type": "string", "title": "Ticket", "enum": ["standard", "vip"], "enumNames": ["Standard", "VIP"] },
+        "guests":  { "type": "integer", "title": "Guests", "minimum": 0, "maximum": 5 },
+        "notes":   { "type": "string", "title": "Dietary notes", "x-widget": "textarea" },
+        "subscribe": { "type": "boolean", "title": "Email me about future events" }
+      }
+    }
+    """;
+
+    protected override void OnInitialized() => Rebuild();
+
+    private void Rebuild()
+    {
+        try
+        {
+            _schema = JsonSchemaImporter.Import(_json);
+            _data = new Dictionary<string, object?>();
+            _version++;
+            _error = null;
+            _submitted = false;
+        }
+        catch (Exception ex)
+        {
+            _error = "Invalid JSON Schema: " + ex.Message;
+        }
+    }
+
+    private void ExportRoundTrip()
+    {
+        if (_schema is null) return;
+        _json = JsonSchemaExporter.Export(_schema);
+    }
+
+    private void HandleSubmit(FormState state)
+    {
+        _submitted = true;
+        _resultJson = System.Text.Json.JsonSerializer.Serialize(_data,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}

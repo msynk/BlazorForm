@@ -1,0 +1,26 @@
+@inherits InputBase
+
+<input id="@Context.ElementId"
+       class="@CssClass"
+       type="@HtmlType"
+       value="@Context.StringValue"
+       placeholder="@Field.Placeholder"
+       disabled="@Disabled"
+       readonly="@Field.ReadOnly"
+       maxlength="@Field.MaxLength"
+       pattern="@Field.Pattern"
+       @onchange="OnChange"
+       @onblur="OnBlur" />
+
+@code {
+    private string HtmlType => Field.Type switch
+    {
+        FieldType.Email => "email",
+        FieldType.Password => "password",
+        FieldType.Url => "url",
+        FieldType.Tel => "tel",
+        FieldType.Color => "color",
+        FieldType.Hidden => "hidden",
+        _ => "text"
+    };
+}

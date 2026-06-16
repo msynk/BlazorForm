@@ -1,0 +1,16 @@
+@inherits InputBase
+
+<div class="ff-radio-group" role="radiogroup">
+    @foreach (var opt in Field.Options)
+    {
+        <label class="ff-radio">
+            <input type="radio"
+                   name="@Context.ElementId"
+                   value="@opt.Value"
+                   checked="@(opt.Value == Context.StringValue)"
+                   disabled="@(Disabled || opt.Disabled)"
+                   @onchange="@(() => Context.SetFromStringAsync(opt.Value))" />
+            <span>@opt.Label</span>
+        </label>
+    }
+</div>

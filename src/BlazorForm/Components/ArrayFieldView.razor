@@ -1,0 +1,74 @@
+@using BlazorForm.Core.Data
+
+<div class="ff-array">
+    <div class="ff-array__header">
+        <span class="ff-array__title">@(Field.Label ?? Field.Name)</span>
+        @if (Field.Required)
+        {
+            <span class="ff-required" aria-hidden="true">*</span>
+        }
+    </div>
+    @if (!string.IsNullOrEmpty(Field.HelpText))
+    {
+        <p class="ff-help">@Field.HelpText</p>
+    }
+
+    @{
+        var count = State.ArrayCount(Path);
+    }
+
+    @if (count == 0)
+    {
+        <p class="ff-array__empty">No items yet.</p>
+    }
+
+    @for (var index = 0; index < count; index++)
+    {
+        var i = index;
+        var itemPath = FormPath.Combine(Path, i);
+        <div class="ff-array__item" @key="i">
+            <div class="ff-array__item-body">
+                @if (Template.Type == FieldType.Object)
+                {
+                    @foreach (var child in Template.Children.OrderBy(c => c.Order))
+                    {
+                        <FormFieldView State="State" Field="child" Path="@FormPath.Combine(itemPath, child.Name)" />
+                    }
+                }
+                else
+                {
+                    <FormFieldView State="State" Field="Template" Path="@itemPath" />
+                }
+            </div>
+            <div class="ff-array__item-actions">
+                <button type="button" class="ff-btn ff-btn--icon" title="Move up"
+                        disabled="@(i == 0)" @onclick="@(() => State.MoveArrayItem(Path, i, i - 1))">↑</button>
+                <button type="button" class="ff-btn ff-btn--icon" title="Move down"
+                        disabled="@(i == count - 1)" @onclick="@(() => State.MoveArrayItem(Path, i, i + 1))">↓</button>
+                <button type="button" class="ff-btn ff-btn--danger" title="Remove"
+                        @onclick="@(() => State.RemoveArrayItem(Path, i))">Remove</button>
+            </div>
+        </div>
+    }
+
+    <button type="button" class="ff-btn ff-btn--add"
+            disabled="@(Field.MaxItems is { } max && count >= max)"
+            @onclick="Add">
+        + Add @ItemNoun
+    </button>
+
+    <ValidationMessages Messages="State.MessagesFor(Path)" Show="true" />
+</div>
+
+@code {
+    [Parameter, EditorRequired] public FormState State { get; set; } = default!;
+    [Parameter, EditorRequired] public FieldDefinition Field { get; set; } = default!;
+    [Parameter, EditorRequired] public string Path { get; set; } = default!;
+
+    private FieldDefinition Template => Field.ItemTemplate
+        ?? throw new InvalidOperationException($"Array field '{Field.Name}' has no item template.");
+
+    private string ItemNoun => Field.Attributes.TryGetValue("itemNoun", out var n) && n is string s ? s : "item";
+
+    private void Add() => State.AddArrayItem(Field, Path);
+}

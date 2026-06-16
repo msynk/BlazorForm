@@ -1,0 +1,152 @@
+@using BlazorForm.Core.Data
+@implements IDisposable
+@inject IServiceProvider ServiceProvider
+
+<form class="ff-form" @onsubmit="HandleSubmit" @onsubmit:preventDefault="true">
+    @if (!string.IsNullOrEmpty(FormState.Definition.Title))
+    {
+        <h2 class="ff-form__title">@FormState.Definition.Title</h2>
+    }
+    @if (!string.IsNullOrEmpty(FormState.Definition.Description))
+    {
+        <p class="ff-form__description">@FormState.Definition.Description</p>
+    }
+
+    @if (FormState.Definition.IsWizard)
+    {
+        <ol class="ff-stepper">
+            @for (var s = 0; s < FormState.Definition.Steps.Count; s++)
+            {
+                var step = FormState.Definition.Steps[s];
+                if (!FormState.IsStepVisible(step)) { continue; }
+                var index = s;
+                <li class="ff-stepper__step @(index == FormState.CurrentStepIndex ? "is-active" : "") @(index < FormState.CurrentStepIndex ? "is-done" : "")">
+                    <span class="ff-stepper__num">@(index + 1)</span>
+                    <span class="ff-stepper__label">@(step.Title ?? step.Id)</span>
+                </li>
+            }
+        </ol>
+
+        var current = FormState.CurrentStep!;
+        <div class="ff-step-body">
+            @if (!string.IsNullOrEmpty(current.Description))
+            {
+                <p class="ff-form__description">@current.Description</p>
+            }
+            @foreach (var name in current.Fields)
+            {
+                var field = FormState.Definition.FindField(name);
+                if (field is not null)
+                {
+                    <FormFieldView State="FormState" Field="field" Path="@field.Name" />
+                }
+            }
+        </div>
+
+        <div class="ff-form__actions">
+            <button type="button" class="ff-btn" disabled="@FormState.IsFirstStep" @onclick="FormState.PreviousStep">Back</button>
+            @if (FormState.IsLastStep)
+            {
+                <button type="submit" class="ff-btn ff-btn--primary" disabled="@FormState.IsValidating">@SubmitText</button>
+            }
+            else
+            {
+                <button type="button" class="ff-btn ff-btn--primary" @onclick="Next">Next</button>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="ff-form__body">
+            @foreach (var field in FormState.Definition.Fields.OrderBy(f => f.Order))
+            {
+                <FormFieldView State="FormState" Field="field" Path="@field.Name" />
+            }
+        </div>
+
+        @if (ShowSubmitButton)
+        {
+            <div class="ff-form__actions">
+                <button type="submit" class="ff-btn ff-btn--primary" disabled="@FormState.IsValidating">@SubmitText</button>
+            </div>
+        }
+    }
+
+    @ChildContent
+</form>
+
+@code {
+    /// <summary>The schema to render. Required unless <see cref="State"/> is supplied.</summary>
+    [Parameter] public FormDefinition? Definition { get; set; }
+
+    /// <summary>Optional typed model to bind to. When omitted, a dictionary store is used.</summary>
+    [Parameter] public object? Model { get; set; }
+
+    /// <summary>Optional dictionary backing store (used when <see cref="Model"/> is null).</summary>
+    [Parameter] public IDictionary<string, object?>? Data { get; set; }
+
+    /// <summary>Provide a pre-configured state (e.g. with FluentValidation wired up).</summary>
+    [Parameter] public FormState? State { get; set; }
+
+    /// <summary>Raised with the state after a successful (valid) submit.</summary>
+    [Parameter] public EventCallback<FormState> OnValidSubmit { get; set; }
+
+    /// <summary>Raised after a submit that failed validation.</summary>
+    [Parameter] public EventCallback<FormState> OnInvalidSubmit { get; set; }
+
+    [Parameter] public bool ShowSubmitButton { get; set; } = true;
+    [Parameter] public string SubmitText { get; set; } = "Submit";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private FormState FormState { get; set; } = default!;
+    private FormState? _built;
+
+    protected override void OnParametersSet()
+    {
+        if (State is not null)
+        {
+            Attach(State);
+            return;
+        }
+
+        if (_built is null)
+        {
+            if (Definition is null)
+                throw new InvalidOperationException($"{nameof(BlazorFormView)} requires either a {nameof(Definition)} or a {nameof(State)}.");
+
+            IFormDataAccessor accessor = Model is not null
+                ? new ModelDataAccessor(Model)
+                : new DictionaryDataAccessor(Data);
+
+            _built = new FormState(Definition, accessor, ServiceProvider);
+            Attach(_built);
+        }
+    }
+
+    private void Attach(FormState state)
+    {
+        if (ReferenceEquals(FormState, state)) return;
+        if (FormState is not null) FormState.StateChanged -= OnStateChanged;
+        FormState = state;
+        FormState.StateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task Next() => await FormState.NextStepAsync();
+
+    private async Task HandleSubmit()
+    {
+        FormState.RegisterSubmitAttempt();
+        var valid = await FormState.ValidateAsync();
+        if (valid)
+            await OnValidSubmit.InvokeAsync(FormState);
+        else
+            await OnInvalidSubmit.InvokeAsync(FormState);
+    }
+
+    public void Dispose()
+    {
+        if (FormState is not null) FormState.StateChanged -= OnStateChanged;
+    }
+}

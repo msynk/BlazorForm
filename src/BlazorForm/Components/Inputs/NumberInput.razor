@@ -1,0 +1,19 @@
+@inherits InputBase
+
+<input id="@Context.ElementId"
+       class="@CssClass"
+       type="number"
+       value="@Context.StringValue"
+       placeholder="@Field.Placeholder"
+       disabled="@Disabled"
+       readonly="@Field.ReadOnly"
+       min="@Field.Min"
+       max="@Field.Max"
+       step="@Step"
+       @onchange="OnChange"
+       @onblur="OnBlur" />
+
+@code {
+    private string Step => Field.NumericStep?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        ?? (Field.Type == FieldType.Integer ? "1" : "any");
+}

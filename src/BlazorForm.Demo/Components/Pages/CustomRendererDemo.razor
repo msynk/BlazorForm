@@ -1,0 +1,45 @@
+@page "/custom-renderer"
+@rendermode InteractiveServer
+
+<PageTitle>Custom renderer</PageTitle>
+
+<div class="demo-intro">
+    <h1>Custom renderer</h1>
+    <p>Renderers are pluggable. The <em>rating</em> field below is drawn by a custom star-rating component registered against the key <code>"rating"</code> — the engine, validation and state are unchanged.</p>
+</div>
+
+<div class="demo-card">
+    <BlazorFormView Definition="_schema" Data="_data" OnValidSubmit="HandleSubmit" SubmitText="Send feedback" />
+</div>
+
+@if (_submitted)
+{
+    <div class="demo-result"><strong>Thanks ✓</strong> <pre>@_json</pre></div>
+}
+
+@code {
+    private FormDefinition _schema = default!;
+    private readonly Dictionary<string, object?> _data = new();
+    private bool _submitted;
+    private string _json = "";
+
+    protected override void OnInitialized()
+    {
+        _schema = FormBuilder.Create()
+            .Title("Leave feedback")
+            .Field("rating", FieldType.Custom, f => f
+                .Label("How would you rate us?")
+                .CustomRenderer("rating")
+                .Attr("max", 5)
+                .Must(v => v is int i && i >= 1, "Please pick a rating."))
+            .Text("comment", f => f.AsTextArea(3).Label("Comments").Placeholder("Optional"))
+            .Build();
+    }
+
+    private void HandleSubmit(FormState state)
+    {
+        _submitted = true;
+        _json = System.Text.Json.JsonSerializer.Serialize(_data,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}

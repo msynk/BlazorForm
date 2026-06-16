@@ -1,0 +1,14 @@
+@if (Show && Messages.Count > 0)
+{
+    <ul class="ff-messages">
+        @foreach (var msg in Messages)
+        {
+            <li class="ff-message ff-message--@msg.Severity.ToString().ToLowerInvariant()">@msg.Message</li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ValidationMessage> Messages { get; set; } = Array.Empty<ValidationMessage>();
+    [Parameter] public bool Show { get; set; } = true;
+}

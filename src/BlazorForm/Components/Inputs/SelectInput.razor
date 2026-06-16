@@ -1,0 +1,33 @@
+@inherits InputBase
+
+<select id="@Context.ElementId"
+        class="@CssClass"
+        disabled="@Disabled"
+        value="@Context.StringValue"
+        @onchange="OnChange">
+    <option value="">@(Field.Placeholder ?? "-- Select --")</option>
+    @foreach (var group in Grouped)
+    {
+        @if (group.Key is null)
+        {
+            @foreach (var opt in group)
+            {
+                <option value="@opt.Value" disabled="@opt.Disabled" selected="@(opt.Value == Context.StringValue)">@opt.Label</option>
+            }
+        }
+        else
+        {
+            <optgroup label="@group.Key">
+                @foreach (var opt in group)
+                {
+                    <option value="@opt.Value" disabled="@opt.Disabled" selected="@(opt.Value == Context.StringValue)">@opt.Label</option>
+                }
+            </optgroup>
+        }
+    }
+</select>
+
+@code {
+    private IEnumerable<IGrouping<string?, SelectOption>> Grouped
+        => Field.Options.GroupBy(o => o.Group);
+}
