@@ -1,0 +1,78 @@
+@namespace BlazorForm
+@inject IBlazorFormFieldRendererRegistry Registry
+
+@if (State.IsVisible(Field))
+{
+    @if (Field.Type == BlazorFormFieldType.Hidden)
+    {
+        <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
+    }
+    else if (Field.Type == BlazorFormFieldType.Object)
+    {
+        <fieldset class="ff-group">
+            @if (!string.IsNullOrEmpty(Field.Label))
+            {
+                <legend class="ff-group__legend">@Field.Label</legend>
+            }
+            @if (!string.IsNullOrEmpty(Field.HelpText))
+            {
+                <p class="ff-help">@Field.HelpText</p>
+            }
+            <div class="ff-group__body">
+                @foreach (var child in Ordered(Field.Children))
+                {
+                    <BlazorFormFieldView State="State" Field="child" Path="@BlazorFormPath.Combine(Path, child.Name)" />
+                }
+            </div>
+        </fieldset>
+    }
+    else if (Field.Type == BlazorFormFieldType.Array)
+    {
+        <BlazorFormArrayFieldView State="State" Field="Field" Path="@Path" />
+    }
+    else if (Field.Type == BlazorFormFieldType.Checkbox)
+    {
+        <div class="ff-field ff-field--checkbox @(Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "")">
+            <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
+            @if (!string.IsNullOrEmpty(Field.HelpText))
+            {
+                <p class="ff-help">@Field.HelpText</p>
+            }
+            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" />
+        </div>
+    }
+    else
+    {
+        <div class="ff-field @(Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "")">
+            <label class="ff-label" for="@Context.ElementId">
+                @(Field.Label ?? Field.Name)
+                @if (Field.Required)
+                {
+                    <span class="ff-required" aria-hidden="true">*</span>
+                }
+            </label>
+            <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
+            @if (!string.IsNullOrEmpty(Field.HelpText))
+            {
+                <p class="ff-help">@Field.HelpText</p>
+            }
+            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" />
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public BlazorFormState State { get; set; } = default!;
+    [Parameter, EditorRequired] public BlazorFormFieldDefinition Field { get; set; } = default!;
+    [Parameter, EditorRequired] public string Path { get; set; } = default!;
+
+    private BlazorFormFieldContext Context => new(State, Field, Path);
+
+    private IDictionary<string, object> Params => new Dictionary<string, object>
+    {
+        ["Context"] = Context
+    };
+
+    private static IEnumerable<BlazorFormFieldDefinition> Ordered(IEnumerable<BlazorFormFieldDefinition> fields)
+        => fields.OrderBy(f => f.Order);
+}

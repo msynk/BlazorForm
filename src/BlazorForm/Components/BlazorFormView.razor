@@ -1,4 +1,4 @@
-@using BlazorForm.Core.Data
+@namespace BlazorForm
 @implements IDisposable
 @inject IServiceProvider ServiceProvider
 
@@ -38,7 +38,7 @@
                 var field = FormState.Definition.FindField(name);
                 if (field is not null)
                 {
-                    <FormFieldView State="FormState" Field="field" Path="@field.Name" />
+                    <BlazorFormFieldView State="FormState" Field="field" Path="@field.Name" />
                 }
             }
         </div>
@@ -60,7 +60,7 @@
         <div class="ff-form__body">
             @foreach (var field in FormState.Definition.Fields.OrderBy(f => f.Order))
             {
-                <FormFieldView State="FormState" Field="field" Path="@field.Name" />
+                <BlazorFormFieldView State="FormState" Field="field" Path="@field.Name" />
             }
         </div>
 
@@ -77,7 +77,7 @@
 
 @code {
     /// <summary>The schema to render. Required unless <see cref="State"/> is supplied.</summary>
-    [Parameter] public FormDefinition? Definition { get; set; }
+    [Parameter] public BlazorFormDefinition? Definition { get; set; }
 
     /// <summary>Optional typed model to bind to. When omitted, a dictionary store is used.</summary>
     [Parameter] public object? Model { get; set; }
@@ -86,20 +86,20 @@
     [Parameter] public IDictionary<string, object?>? Data { get; set; }
 
     /// <summary>Provide a pre-configured state (e.g. with FluentValidation wired up).</summary>
-    [Parameter] public FormState? State { get; set; }
+    [Parameter] public BlazorFormState? State { get; set; }
 
     /// <summary>Raised with the state after a successful (valid) submit.</summary>
-    [Parameter] public EventCallback<FormState> OnValidSubmit { get; set; }
+    [Parameter] public EventCallback<BlazorFormState> OnValidSubmit { get; set; }
 
     /// <summary>Raised after a submit that failed validation.</summary>
-    [Parameter] public EventCallback<FormState> OnInvalidSubmit { get; set; }
+    [Parameter] public EventCallback<BlazorFormState> OnInvalidSubmit { get; set; }
 
     [Parameter] public bool ShowSubmitButton { get; set; } = true;
     [Parameter] public string SubmitText { get; set; } = "Submit";
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    private FormState FormState { get; set; } = default!;
-    private FormState? _built;
+    private BlazorFormState FormState { get; set; } = default!;
+    private BlazorFormState? _built;
 
     protected override void OnParametersSet()
     {
@@ -114,16 +114,16 @@
             if (Definition is null)
                 throw new InvalidOperationException($"{nameof(BlazorFormView)} requires either a {nameof(Definition)} or a {nameof(State)}.");
 
-            IFormDataAccessor accessor = Model is not null
-                ? new ModelDataAccessor(Model)
-                : new DictionaryDataAccessor(Data);
+            IBlazorFormDataAccessor accessor = Model is not null
+                ? new BlazorFormModelDataAccessor(Model)
+                : new BlazorFormDictionaryDataAccessor(Data);
 
-            _built = new FormState(Definition, accessor, ServiceProvider);
+            _built = new BlazorFormState(Definition, accessor, ServiceProvider);
             Attach(_built);
         }
     }
 
-    private void Attach(FormState state)
+    private void Attach(BlazorFormState state)
     {
         if (ReferenceEquals(FormState, state)) return;
         if (FormState is not null) FormState.StateChanged -= OnStateChanged;

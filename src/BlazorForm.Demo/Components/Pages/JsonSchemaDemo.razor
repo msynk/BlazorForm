@@ -35,7 +35,7 @@
 }
 
 @code {
-    private FormDefinition? _schema;
+    private BlazorFormDefinition? _schema;
     private Dictionary<string, object?> _data = new();
     private int _version;
     private string? _error;
@@ -64,7 +64,7 @@
     {
         try
         {
-            _schema = JsonSchemaImporter.Import(_json);
+            _schema = BlazorFormJsonSchemaImporter.Import(_json);
             _data = new Dictionary<string, object?>();
             _version++;
             _error = null;
@@ -79,10 +79,10 @@
     private void ExportRoundTrip()
     {
         if (_schema is null) return;
-        _json = JsonSchemaExporter.Export(_schema);
+        _json = BlazorFormJsonSchemaExporter.Export(_schema);
     }
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _resultJson = System.Text.Json.JsonSerializer.Serialize(_data,

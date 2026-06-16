@@ -1,0 +1,27 @@
+@namespace BlazorForm
+@inherits BlazorFormInputBase
+
+<input id="@Context.ElementId"
+       class="@CssClass"
+       type="@HtmlType"
+       value="@Context.StringValue"
+       placeholder="@Field.Placeholder"
+       disabled="@Disabled"
+       readonly="@Field.ReadOnly"
+       maxlength="@Field.MaxLength"
+       pattern="@Field.Pattern"
+       @onchange="OnChange"
+       @onblur="OnBlur" />
+
+@code {
+    private string HtmlType => Field.Type switch
+    {
+        BlazorFormFieldType.Email => "email",
+        BlazorFormFieldType.Password => "password",
+        BlazorFormFieldType.Url => "url",
+        BlazorFormFieldType.Tel => "tel",
+        BlazorFormFieldType.Color => "color",
+        BlazorFormFieldType.Hidden => "hidden",
+        _ => "text"
+    };
+}

@@ -20,13 +20,13 @@
 
 @code {
     private readonly JobApplication _model = new();
-    private FormState _state = default!;
+    private BlazorFormState _state = default!;
     private bool _submitted;
     private string _json = "";
 
     protected override void OnInitialized()
     {
-        var schema = FormBuilder.For<JobApplication>()
+        var schema = BlazorFormBuilder.For<JobApplication>()
             .Title("Job application")
             .Field(x => x.FirstName, f => f.Label("First name"))
             .Field(x => x.LastName, f => f.Label("Last name"))
@@ -37,11 +37,11 @@
             .Build();
 
         // Validation comes entirely from the FluentValidation validator.
-        _state = new FormState(schema, new ModelDataAccessor(_model))
+        _state = new BlazorFormState(schema, new BlazorFormModelDataAccessor(_model))
             .UseFluentValidation(Validator);
     }
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _json = System.Text.Json.JsonSerializer.Serialize(_model,

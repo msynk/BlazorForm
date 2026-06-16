@@ -1,9 +1,4 @@
-using BlazorForm.Core.Building;
-using BlazorForm.Core.Data;
-using BlazorForm.Core.Generation;
-using BlazorForm.Core.Json;
-using BlazorForm.Core.Schema;
-using BlazorForm.Core.State;
+using BlazorForm;
 
 namespace BlazorForm.Tests;
 
@@ -12,22 +7,22 @@ public class SchemaGeneratorTests
     [Fact]
     public void Generates_fields_from_model()
     {
-        var form = SchemaGenerator.Generate<RegistrationModel>();
+        var form = BlazorFormSchemaGenerator.Generate<RegistrationModel>();
 
         Assert.Equal("First name", form.FindField("FirstName")!.Label); // from [Display]
         Assert.True(form.FindField("FirstName")!.Required);
-        Assert.Equal(FieldType.Email, form.FindField("Email")!.Type);
-        Assert.Equal(FieldType.Select, form.FindField("AccountType")!.Type);
+        Assert.Equal(BlazorFormFieldType.Email, form.FindField("Email")!.Type);
+        Assert.Equal(BlazorFormFieldType.Select, form.FindField("AccountType")!.Type);
         Assert.Equal(2, form.FindField("AccountType")!.Options.Count);
-        Assert.Equal(FieldType.Object, form.FindField("Address")!.Type);
-        Assert.Equal(FieldType.Array, form.FindField("Items")!.Type);
+        Assert.Equal(BlazorFormFieldType.Object, form.FindField("Address")!.Type);
+        Assert.Equal(BlazorFormFieldType.Array, form.FindField("Items")!.Type);
         Assert.NotNull(form.FindField("Items")!.ItemTemplate);
     }
 
     [Fact]
     public void Generated_range_and_length_produce_constraints()
     {
-        var form = SchemaGenerator.Generate<RegistrationModel>();
+        var form = BlazorFormSchemaGenerator.Generate<RegistrationModel>();
         var age = form.FindField("Age")!;
         Assert.Equal(18, age.Min);
         Assert.Equal(120, age.Max);
@@ -40,7 +35,7 @@ public class FormBuilderTests
     [Fact]
     public void Builds_typed_form_with_inferred_types()
     {
-        var form = FormBuilder.For<RegistrationModel>()
+        var form = BlazorFormBuilder.For<RegistrationModel>()
             .Title("Register")
             .Field(x => x.FirstName, f => f.Required().MinLength(2))
             .Field(x => x.Age, f => f.Range(18, 120))
@@ -48,15 +43,15 @@ public class FormBuilderTests
             .Build();
 
         Assert.Equal("Register", form.Title);
-        Assert.Equal(FieldType.Integer, form.FindField("Age")!.Type);
-        Assert.Equal(FieldType.Select, form.FindField("AccountType")!.Type);
+        Assert.Equal(BlazorFormFieldType.Integer, form.FindField("Age")!.Type);
+        Assert.Equal(BlazorFormFieldType.Select, form.FindField("AccountType")!.Type);
         Assert.Equal(2, form.FindField("AccountType")!.Options.Count);
     }
 
     [Fact]
     public void Untyped_builder_supports_objects_and_arrays_and_steps()
     {
-        var form = FormBuilder.Create()
+        var form = BlazorFormBuilder.Create()
             .Text("name", f => f.Required())
             .Object("address", a => a.Text("city"))
             .Array("items", i => i.Text("product").Number("qty"))
@@ -64,8 +59,8 @@ public class FormBuilderTests
             .Build();
 
         Assert.True(form.IsWizard);
-        Assert.Equal(FieldType.Object, form.FindField("address")!.Type);
-        Assert.Equal(FieldType.Array, form.FindField("items")!.Type);
+        Assert.Equal(BlazorFormFieldType.Object, form.FindField("address")!.Type);
+        Assert.Equal(BlazorFormFieldType.Array, form.FindField("items")!.Type);
         Assert.Equal(2, form.FindField("items")!.ItemTemplate!.Children.Count);
     }
 }
@@ -75,8 +70,8 @@ public class FormStateTests
     [Fact]
     public void Tracks_dirty_and_value_changes()
     {
-        var form = SchemaGenerator.Generate<RegistrationModel>();
-        var state = new FormState(form, new ModelDataAccessor(new RegistrationModel()));
+        var form = BlazorFormSchemaGenerator.Generate<RegistrationModel>();
+        var state = new BlazorFormState(form, new BlazorFormModelDataAccessor(new RegistrationModel()));
 
         Assert.False(state.IsFormDirty);
         state.SetValue("FirstName", "Grace");
@@ -87,9 +82,9 @@ public class FormStateTests
     [Fact]
     public void Array_add_and_remove_works_on_typed_model()
     {
-        var form = SchemaGenerator.Generate<RegistrationModel>();
+        var form = BlazorFormSchemaGenerator.Generate<RegistrationModel>();
         var model = new RegistrationModel();
-        var state = new FormState(form, new ModelDataAccessor(model));
+        var state = new BlazorFormState(form, new BlazorFormModelDataAccessor(model));
         var itemsField = form.FindField("Items")!;
 
         var idx = state.AddArrayItem(itemsField, "Items");
@@ -107,7 +102,7 @@ public class FormStateTests
     [Fact]
     public async Task Wizard_navigation_validates_each_step()
     {
-        var form = FormBuilder.For<RegistrationModel>()
+        var form = BlazorFormBuilder.For<RegistrationModel>()
             .Field(x => x.FirstName, f => f.Required())
             .Field(x => x.Email, f => f.Required().Email())
             .Step("s1", s => s.Fields("FirstName"))
@@ -115,7 +110,7 @@ public class FormStateTests
             .Build();
 
         var model = new RegistrationModel();
-        var state = new FormState(form, new ModelDataAccessor(model));
+        var state = new BlazorFormState(form, new BlazorFormModelDataAccessor(model));
 
         // Cannot advance while first step invalid.
         Assert.False(await state.NextStepAsync());
@@ -130,10 +125,10 @@ public class FormStateTests
     [Fact]
     public void Applies_default_values()
     {
-        var form = FormBuilder.Create()
+        var form = BlazorFormBuilder.Create()
             .Checkbox("subscribe", f => f.Default(true))
             .Build();
-        var state = new FormState(form, new DictionaryDataAccessor());
+        var state = new BlazorFormState(form, new BlazorFormDictionaryDataAccessor());
         Assert.Equal(true, state.GetValue("subscribe"));
     }
 }
@@ -163,31 +158,31 @@ public class JsonSchemaTests
     [Fact]
     public void Imports_json_schema()
     {
-        var form = JsonSchemaImporter.Import(Json);
+        var form = BlazorFormJsonSchemaImporter.Import(Json);
 
         Assert.Equal("Contact", form.Title);
         Assert.True(form.FindField("name")!.Required);
         Assert.Equal("Full name", form.FindField("name")!.Label);
-        Assert.Equal(FieldType.Email, form.FindField("email")!.Type);
-        Assert.Equal(FieldType.Integer, form.FindField("age")!.Type);
-        Assert.Equal(FieldType.Select, form.FindField("role")!.Type);
+        Assert.Equal(BlazorFormFieldType.Email, form.FindField("email")!.Type);
+        Assert.Equal(BlazorFormFieldType.Integer, form.FindField("age")!.Type);
+        Assert.Equal(BlazorFormFieldType.Select, form.FindField("role")!.Type);
         Assert.Equal("Admin", form.FindField("role")!.Options[0].Label);
-        Assert.Equal(FieldType.TextArea, form.FindField("bio")!.Type);
-        Assert.Equal(FieldType.Object, form.FindField("address")!.Type);
-        Assert.Equal(FieldType.Array, form.FindField("tags")!.Type);
+        Assert.Equal(BlazorFormFieldType.TextArea, form.FindField("bio")!.Type);
+        Assert.Equal(BlazorFormFieldType.Object, form.FindField("address")!.Type);
+        Assert.Equal(BlazorFormFieldType.Array, form.FindField("tags")!.Type);
     }
 
     [Fact]
     public void Round_trips_through_export_and_import()
     {
-        var original = JsonSchemaImporter.Import(Json);
-        var exported = JsonSchemaExporter.Export(original);
-        var reimported = JsonSchemaImporter.Import(exported);
+        var original = BlazorFormJsonSchemaImporter.Import(Json);
+        var exported = BlazorFormJsonSchemaExporter.Export(original);
+        var reimported = BlazorFormJsonSchemaImporter.Import(exported);
 
         Assert.Equal(original.Fields.Count, reimported.Fields.Count);
-        Assert.Equal(FieldType.Email, reimported.FindField("email")!.Type);
-        Assert.Equal(FieldType.Select, reimported.FindField("role")!.Type);
+        Assert.Equal(BlazorFormFieldType.Email, reimported.FindField("email")!.Type);
+        Assert.Equal(BlazorFormFieldType.Select, reimported.FindField("role")!.Type);
         Assert.True(reimported.FindField("name")!.Required);
-        Assert.Equal(FieldType.Object, reimported.FindField("address")!.Type);
+        Assert.Equal(BlazorFormFieldType.Object, reimported.FindField("address")!.Type);
     }
 }

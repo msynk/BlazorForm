@@ -1,4 +1,4 @@
-using BlazorForm.Core.Data;
+using BlazorForm;
 
 namespace BlazorForm.Tests;
 
@@ -7,7 +7,7 @@ public class FormPathTests
     [Fact]
     public void Parses_dotted_and_indexed_paths()
     {
-        var segments = FormPath.Parse("items[2].product");
+        var segments = BlazorFormPath.Parse("items[2].product");
         Assert.Equal(3, segments.Count);
         Assert.Equal("items", segments[0].Name);
         Assert.True(segments[1].IsIndex);
@@ -18,9 +18,9 @@ public class FormPathTests
     [Fact]
     public void Combine_builds_paths()
     {
-        Assert.Equal("a.b", FormPath.Combine("a", "b"));
-        Assert.Equal("b", FormPath.Combine("", "b"));
-        Assert.Equal("a[3]", FormPath.Combine("a", 3));
+        Assert.Equal("a.b", BlazorFormPath.Combine("a", "b"));
+        Assert.Equal("b", BlazorFormPath.Combine("", "b"));
+        Assert.Equal("a[3]", BlazorFormPath.Combine("a", 3));
     }
 }
 
@@ -29,7 +29,7 @@ public class DictionaryDataAccessorTests
     [Fact]
     public void Sets_and_gets_nested_values()
     {
-        var data = new DictionaryDataAccessor();
+        var data = new BlazorFormDictionaryDataAccessor();
         data.SetValue("address.city", "Paris");
         Assert.Equal("Paris", data.GetValue("address.city"));
     }
@@ -37,7 +37,7 @@ public class DictionaryDataAccessorTests
     [Fact]
     public void Sets_and_gets_array_values()
     {
-        var data = new DictionaryDataAccessor();
+        var data = new BlazorFormDictionaryDataAccessor();
         data.SetValue("items[0].product", "Widget");
         data.SetValue("items[1].product", "Gadget");
         Assert.Equal("Widget", data.GetValue("items[0].product"));
@@ -47,7 +47,7 @@ public class DictionaryDataAccessorTests
     [Fact]
     public void Missing_paths_return_null()
     {
-        var data = new DictionaryDataAccessor();
+        var data = new BlazorFormDictionaryDataAccessor();
         Assert.Null(data.GetValue("nope.missing"));
         Assert.Null(data.GetValue("arr[5]"));
     }
@@ -59,7 +59,7 @@ public class ModelDataAccessorTests
     public void Reads_and_writes_nested_properties()
     {
         var model = new RegistrationModel();
-        var data = new ModelDataAccessor(model);
+        var data = new BlazorFormModelDataAccessor(model);
 
         data.SetValue("FirstName", "Ada");
         data.SetValue("Address.City", "London");
@@ -74,7 +74,7 @@ public class ModelDataAccessorTests
     public void Converts_string_to_target_type()
     {
         var model = new RegistrationModel();
-        var data = new ModelDataAccessor(model);
+        var data = new BlazorFormModelDataAccessor(model);
         data.SetValue("Age", "42");
         Assert.Equal(42, model.Age);
     }
@@ -82,7 +82,7 @@ public class ModelDataAccessorTests
     [Fact]
     public void Resolves_array_element_type()
     {
-        var data = new ModelDataAccessor(new RegistrationModel());
+        var data = new BlazorFormModelDataAccessor(new RegistrationModel());
         Assert.Equal(typeof(LineItem), data.GetElementType("Items"));
     }
 }

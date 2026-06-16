@@ -1,0 +1,16 @@
+@namespace BlazorForm
+@inherits BlazorFormInputBase
+
+<textarea id="@Context.ElementId"
+          class="@CssClass"
+          placeholder="@Field.Placeholder"
+          disabled="@Disabled"
+          readonly="@Field.ReadOnly"
+          maxlength="@Field.MaxLength"
+          rows="@Rows"
+          @onchange="OnChange"
+          @onblur="OnBlur">@Context.StringValue</textarea>
+
+@code {
+    private int Rows => Field.Attributes.TryGetValue("rows", out var r) && r is int i ? i : 4;
+}

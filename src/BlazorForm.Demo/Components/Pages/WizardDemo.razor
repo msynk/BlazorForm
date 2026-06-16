@@ -19,13 +19,13 @@
 
 @code {
     private readonly AccountSignup _model = new();
-    private FormDefinition _schema = default!;
+    private BlazorFormDefinition _schema = default!;
     private bool _submitted;
     private string _json = "";
 
     protected override void OnInitialized()
     {
-        _schema = FormBuilder.For<AccountSignup>()
+        _schema = BlazorFormBuilder.For<AccountSignup>()
             .Title("Account setup")
             .Field(x => x.FullName, f => f.Required().MinLength(2))
             .Field(x => x.Email, f => f.Required().Email())
@@ -37,12 +37,12 @@
             .Step("type", s => s.Title("Account type").Fields("AccountKind"))
             .Step("company", s => s.Title("Company")
                 .Fields("CompanyName", "VatNumber")
-                .VisibleWhen(new FieldCondition("AccountKind", ConditionOperator.Equals, "Business")))
+                .VisibleWhen(new BlazorFormFieldCondition("AccountKind", BlazorFormConditionOperator.Equals, "Business")))
             .Step("confirm", s => s.Title("Confirm").Fields("AcceptTerms"))
             .Build();
     }
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _json = System.Text.Json.JsonSerializer.Serialize(_model,

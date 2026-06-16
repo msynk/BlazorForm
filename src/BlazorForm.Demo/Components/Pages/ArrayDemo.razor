@@ -23,19 +23,19 @@
 
 @code {
     private readonly Invoice _model = new();
-    private FormState _state = default!;
+    private BlazorFormState _state = default!;
     private bool _submitted;
     private string _json = "";
 
     protected override void OnInitialized()
     {
-        var schema = FormBuilder.For<Invoice>()
+        var schema = BlazorFormBuilder.For<Invoice>()
             .Title("New invoice")
             .Field(x => x.Customer, f => f.Required())
             .Field(x => x.Lines, f => f.Items(min: 1, message: "Add at least one line.").Attr("itemNoun", "line"))
             .Build();
 
-        _state = new FormState(schema, new ModelDataAccessor(_model));
+        _state = new BlazorFormState(schema, new BlazorFormModelDataAccessor(_model));
         _state.StateChanged += OnStateChanged;
     }
 
@@ -43,7 +43,7 @@
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _json = System.Text.Json.JsonSerializer.Serialize(_model,

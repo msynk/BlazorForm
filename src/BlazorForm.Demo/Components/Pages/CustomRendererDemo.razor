@@ -18,16 +18,16 @@
 }
 
 @code {
-    private FormDefinition _schema = default!;
+    private BlazorFormDefinition _schema = default!;
     private readonly Dictionary<string, object?> _data = new();
     private bool _submitted;
     private string _json = "";
 
     protected override void OnInitialized()
     {
-        _schema = FormBuilder.Create()
+        _schema = BlazorFormBuilder.Create()
             .Title("Leave feedback")
-            .Field("rating", FieldType.Custom, f => f
+            .Field("rating", BlazorFormFieldType.Custom, f => f
                 .Label("How would you rate us?")
                 .CustomRenderer("rating")
                 .Attr("max", 5)
@@ -36,7 +36,7 @@
             .Build();
     }
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _json = System.Text.Json.JsonSerializer.Serialize(_data,

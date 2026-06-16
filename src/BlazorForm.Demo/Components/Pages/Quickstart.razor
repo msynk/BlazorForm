@@ -22,17 +22,17 @@
 
 @code {
     private readonly AccountSignup _model = new();
-    private FormDefinition _schema = default!;
+    private BlazorFormDefinition _schema = default!;
     private bool _submitted;
     private string _json = "";
 
     protected override void OnInitialized()
     {
         // Zero-config: generate the whole form from the type.
-        _schema = SchemaGenerator.Generate<AccountSignup>();
+        _schema = BlazorFormSchemaGenerator.Generate<AccountSignup>();
     }
 
-    private void HandleSubmit(FormState state)
+    private void HandleSubmit(BlazorFormState state)
     {
         _submitted = true;
         _json = System.Text.Json.JsonSerializer.Serialize(_model,
