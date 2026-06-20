@@ -20,7 +20,37 @@
     </div>
 }
 
+<details class="demo-source">
+    <summary>View source</summary>
+    <pre><code>@Source</code></pre>
+</details>
+
 @code {
+    private const string Source =
+"""
+@page "/quickstart"
+@rendermode InteractiveServer
+
+<BlazorFormView Definition="_schema" Model="_model" OnValidSubmit="HandleSubmit" SubmitText="Create account" />
+
+@code {
+    private readonly AccountSignup _model = new();
+    private BlazorFormDefinition _schema = default!;
+
+    protected override void OnInitialized()
+    {
+        // Zero-config: generate the whole form from the type.
+        _schema = BlazorFormSchemaGenerator.Generate<AccountSignup>();
+    }
+
+    private void HandleSubmit(BlazorFormState state)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(_model,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}
+""";
+
     private readonly AccountSignup _model = new();
     private BlazorFormDefinition _schema = default!;
     private bool _submitted;

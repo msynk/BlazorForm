@@ -17,7 +17,50 @@
     <div class="demo-result"><strong>All done ✓</strong> <pre>@_json</pre></div>
 }
 
+<details class="demo-source">
+    <summary>View source</summary>
+    <pre><code>@Source</code></pre>
+</details>
+
 @code {
+    private const string Source =
+"""
+@page "/wizard"
+@rendermode InteractiveServer
+
+<BlazorFormView Definition="_schema" Model="_model" OnValidSubmit="HandleSubmit" SubmitText="Finish" />
+
+@code {
+    private readonly AccountSignup _model = new();
+    private BlazorFormDefinition _schema = default!;
+
+    protected override void OnInitialized()
+    {
+        _schema = BlazorFormBuilder.For<AccountSignup>()
+            .Title("Account setup")
+            .Field(x => x.FullName, f => f.Required().MinLength(2))
+            .Field(x => x.Email, f => f.Required().Email())
+            .Field(x => x.AccountKind, f => f.AsRadio().Label("Account type"))
+            .Field(x => x.CompanyName, f => f.Label("Company name").Required("Required for business accounts."))
+            .Field(x => x.VatNumber, f => f.Label("VAT number"))
+            .Field(x => x.AcceptTerms, f => f.Must(v => v is true, "Please accept the terms."))
+            .Step("contact", s => s.Title("Contact").Fields("FullName", "Email"))
+            .Step("type", s => s.Title("Account type").Fields("AccountKind"))
+            .Step("company", s => s.Title("Company")
+                .Fields("CompanyName", "VatNumber")
+                .VisibleWhen(new BlazorFormFieldCondition("AccountKind", BlazorFormConditionOperator.Equals, "Business")))
+            .Step("confirm", s => s.Title("Confirm").Fields("AcceptTerms"))
+            .Build();
+    }
+
+    private void HandleSubmit(BlazorFormState state)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(_model,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}
+""";
+
     private readonly AccountSignup _model = new();
     private BlazorFormDefinition _schema = default!;
     private bool _submitted;

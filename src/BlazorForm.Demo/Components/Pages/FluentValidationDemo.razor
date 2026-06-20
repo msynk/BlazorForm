@@ -18,7 +18,49 @@
     <div class="demo-result"><strong>Application received ✓</strong> <pre>@_json</pre></div>
 }
 
+<details class="demo-source">
+    <summary>View source</summary>
+    <pre><code>@Source</code></pre>
+</details>
+
 @code {
+    private const string Source =
+"""
+@page "/fluent-validation"
+@rendermode InteractiveServer
+@inject global::FluentValidation.IValidator<JobApplication> Validator
+
+<BlazorFormView State="_state" OnValidSubmit="HandleSubmit" SubmitText="Apply" />
+
+@code {
+    private readonly JobApplication _model = new();
+    private BlazorFormState _state = default!;
+
+    protected override void OnInitialized()
+    {
+        var schema = BlazorFormBuilder.For<JobApplication>()
+            .Title("Job application")
+            .Field(x => x.FirstName, f => f.Label("First name"))
+            .Field(x => x.LastName, f => f.Label("Last name"))
+            .Field(x => x.Email)
+            .Field(x => x.YearsExperience, f => f.Label("Years of experience"))
+            .Field(x => x.DesiredSalary, f => f.Label("Desired salary"))
+            .Field(x => x.Motivation, f => f.AsTextArea(4).Label("Why do you want this role?"))
+            .Build();
+
+        // Validation comes entirely from the FluentValidation validator.
+        _state = new BlazorFormState(schema, new BlazorFormModelDataAccessor(_model))
+            .UseFluentValidation(Validator);
+    }
+
+    private void HandleSubmit(BlazorFormState state)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(_model,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}
+""";
+
     private readonly JobApplication _model = new();
     private BlazorFormState _state = default!;
     private bool _submitted;

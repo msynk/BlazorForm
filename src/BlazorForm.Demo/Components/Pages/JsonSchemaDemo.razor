@@ -34,7 +34,72 @@
     <div class="demo-result"><strong>Submitted values ✓</strong> <pre>@_resultJson</pre></div>
 }
 
+<details class="demo-source">
+    <summary>View source</summary>
+    <pre><code>@Source</code></pre>
+</details>
+
 @code {
+    private const string Source =
+""""
+@page "/json-schema"
+@rendermode InteractiveServer
+
+<textarea @bind="_json" @bind:event="oninput"></textarea>
+<button @onclick="Rebuild">Apply schema</button>
+<button @onclick="ExportRoundTrip">Export (round-trip)</button>
+
+@if (_schema is not null)
+{
+    <BlazorFormView @key="_version" Definition="_schema" Data="_data" OnValidSubmit="HandleSubmit" SubmitText="Submit" />
+}
+
+@code {
+    private BlazorFormDefinition? _schema;
+    private Dictionary<string, object?> _data = new();
+    private int _version;
+
+    private string _json = """
+    {
+      "title": "Event registration",
+      "type": "object",
+      "required": ["name", "email", "ticket"],
+      "properties": {
+        "name":    { "type": "string", "title": "Full name", "minLength": 2 },
+        "email":   { "type": "string", "format": "email", "title": "Email" },
+        "ticket":  { "type": "string", "title": "Ticket", "enum": ["standard", "vip"], "enumNames": ["Standard", "VIP"] },
+        "guests":  { "type": "integer", "title": "Guests", "minimum": 0, "maximum": 5 },
+        "notes":   { "type": "string", "title": "Dietary notes", "x-widget": "textarea" },
+        "subscribe": { "type": "boolean", "title": "Email me about future events" }
+      }
+    }
+    """;
+
+    protected override void OnInitialized() => Rebuild();
+
+    private void Rebuild()
+    {
+        // Import a JSON Schema (draft-07) into a form definition.
+        _schema = BlazorFormJsonSchemaImporter.Import(_json);
+        _data = new Dictionary<string, object?>();
+        _version++;
+    }
+
+    private void ExportRoundTrip()
+    {
+        if (_schema is null) return;
+        // Export any form definition back to JSON Schema.
+        _json = BlazorFormJsonSchemaExporter.Export(_schema);
+    }
+
+    private void HandleSubmit(BlazorFormState state)
+    {
+        var resultJson = System.Text.Json.JsonSerializer.Serialize(_data,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+}
+"""";
+
     private BlazorFormDefinition? _schema;
     private Dictionary<string, object?> _data = new();
     private int _version;
