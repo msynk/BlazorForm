@@ -1,20 +1,56 @@
 @namespace BlazorForm
 @inherits BlazorFormInputBase
 
-<input id="@Context.ElementId"
-       class="@CssClass"
-       type="number"
-       value="@Context.StringValue"
-       placeholder="@Field.Placeholder"
-       disabled="@Disabled"
-       readonly="@Field.ReadOnly"
-       min="@Field.Min"
-       max="@Field.Max"
-       step="@Step"
-       @onchange="OnChange"
-       @onblur="OnBlur" />
+@if (HasAffix)
+{
+    <div class="ff-affixed @(Context.HasError && Context.ShowMessages ? "ff-affixed--invalid" : "")">
+        @if (!string.IsNullOrEmpty(Field.Prefix))
+        {
+            <span class="ff-affix ff-affix--prefix" aria-hidden="true">@Field.Prefix</span>
+        }
+        @Control
+        @if (!string.IsNullOrEmpty(Field.Suffix))
+        {
+            <span class="ff-affix ff-affix--suffix" aria-hidden="true">@Field.Suffix</span>
+        }
+    </div>
+}
+else
+{
+    @Control
+}
 
 @code {
-    private string Step => Field.NumericStep?.ToString(System.Globalization.CultureInfo.InvariantCulture)
+    // Splat first: Blazor lets the last duplicate attribute win, so the renderer's own id and aria
+    // wiring below always overrides what the schema supplied.
+    private RenderFragment Control => @<input @attributes="ExtraAttributes"
+                                              id="@Context.ElementId"
+                                              @ref="Element"
+                                              class="@CssClass"
+                                              type="number"
+                                              value="@Context.StringValue"
+                                              placeholder="@Field.Placeholder"
+                                              disabled="@Disabled"
+                                              readonly="@ReadOnly"
+                                              min="@MinAttribute"
+                                              max="@MaxAttribute"
+                                              step="@Step"
+                                              autocomplete="@Field.Autocomplete"
+                                              inputmode="@InputMode"
+                                              aria-required="@AriaRequired"
+                                              aria-invalid="@AriaInvalid"
+                                              aria-label="@AriaLabel"
+                                              aria-describedby="@DescribedBy"
+                                              @onchange="OnChange"
+                                              @oninput="InputHandler"
+                                              @onblur="OnBlur" />
+    ;
+
+    // "any" lets the browser accept decimals; without it a step of 1 is assumed and 1.5 is rejected.
+    private string Step => BlazorFormNumber.ToAttribute(Field.NumericStep)
         ?? (Field.Type == BlazorFormFieldType.Integer ? "1" : "any");
+
+    private string InputMode => Field.InputMode ?? (Field.Type == BlazorFormFieldType.Integer ? "numeric" : "decimal");
+
+    private bool HasAffix => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix);
 }

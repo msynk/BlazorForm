@@ -17,5 +17,7 @@ public enum BlazorFormConditionOperator
     IsNotEmpty,
     IsTrue,
     IsFalse,
-    Matches
+    Matches,
+    StartsWith,
+    EndsWith
 }

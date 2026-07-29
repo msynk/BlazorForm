@@ -14,8 +14,16 @@ public static class BlazorFormSchemaGenerator
 
     public static BlazorFormDefinition Generate(Type modelType, BlazorFormSchemaGeneratorOptions? options = null)
     {
+        ArgumentNullException.ThrowIfNull(modelType);
         options ??= new BlazorFormSchemaGeneratorOptions();
+
         var form = new BlazorFormDefinition { ModelType = modelType };
+        if (modelType.GetCustomAttribute<DisplayAttribute>() is { } display)
+        {
+            form.Title = display.GetName();
+            form.Description = display.GetDescription();
+        }
+
         foreach (var field in BuildFields(modelType, options, depth: 0, new HashSet<Type>()))
             form.Fields.Add(field);
         return form;
@@ -33,6 +41,8 @@ public static class BlazorFormSchemaGenerator
         var list = new List<BlazorFormFieldDefinition>();
         foreach (var prop in props)
             list.Add(BuildField(prop, options, depth, ancestry));
+
+        // OrderBy is stable, so fields that share an order keep their declaration sequence.
         return list.OrderBy(f => f.Order);
     }
 
@@ -45,16 +55,23 @@ public static class BlazorFormSchemaGenerator
         var field = new BlazorFormFieldDefinition(prop.Name, fieldType)
         {
             ValueType = propType,
-            Label = BlazorFormFieldBuilder.Humanize(prop.Name)
+            Label = BlazorFormFieldBuilder.Humanize(prop.Name),
+            ReadOnly = !prop.CanWrite
         };
 
         var underlying = Nullable.GetUnderlyingType(propType) ?? propType;
 
         if (underlying.IsEnum)
         {
-            field.Type = BlazorFormFieldType.Select;
-            foreach (var name in Enum.GetNames(underlying))
-                field.Options.Add(new BlazorFormSelectOption(name, BlazorFormFieldBuilder.Humanize(name)));
+            // Resolve() already chose Select or MultiSelect depending on [Flags].
+            foreach (var option in BlazorFormEnumOptions.For(underlying))
+                field.Options.Add(option);
+        }
+        else if (fieldType == BlazorFormFieldType.File)
+        {
+            // A collection of files is one control that accepts several, not a repeater of file pickers.
+            field.Multiple = BlazorFormFieldTypeResolver.GetEnumerableElementType(underlying) is not null
+                             && underlying != typeof(byte[]);
         }
         else if (fieldType == BlazorFormFieldType.Array && depth < options.MaxDepth)
         {
@@ -70,6 +87,7 @@ public static class BlazorFormSchemaGenerator
         }
 
         BlazorFormDataAnnotationsScanner.Apply(prop, field);
+        options.ConfigureField?.Invoke(field);
         return field;
     }
 
@@ -91,22 +109,32 @@ public static class BlazorFormSchemaGenerator
         var underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
         if (underlying.IsEnum)
         {
-            scalar.Type = BlazorFormFieldType.Select;
-            foreach (var name in Enum.GetNames(underlying))
-                scalar.Options.Add(new BlazorFormSelectOption(name, BlazorFormFieldBuilder.Humanize(name)));
+            foreach (var option in BlazorFormEnumOptions.For(underlying))
+                scalar.Options.Add(option);
         }
         return scalar;
     }
 
     private static bool ShouldSkip(PropertyInfo prop, BlazorFormSchemaGeneratorOptions options)
     {
-        if (prop.GetCustomAttribute<EditableAttribute>() is { AllowEdit: false } && prop.SetMethod is null)
-            return true;
+        if (options.IgnoredProperties.Contains(prop.Name)) return true;
+
         if (options.HonorScaffoldColumn &&
             prop.GetCustomAttribute<ScaffoldColumnAttribute>() is { Scaffold: false })
             return true;
-        if (prop.GetCustomAttribute<KeyAttribute>() is not null)
-            return false;
+
+        // [Display(AutoGenerateField = false)] is the DataAnnotations way of saying "not on a form".
+        if (prop.GetCustomAttribute<DisplayAttribute>()?.GetAutoGenerateField() == false)
+            return true;
+
+        // A get-only scalar cannot be edited; whether it is shown read-only or dropped is configurable.
+        // Containers stay regardless — their children may well be writable.
+        if (!prop.CanWrite && options.ReadOnlyProperties == BlazorFormReadOnlyPropertyHandling.Skip)
+        {
+            var fieldType = BlazorFormFieldTypeResolver.Resolve(prop.PropertyType);
+            if (fieldType is not (BlazorFormFieldType.Object or BlazorFormFieldType.Array)) return true;
+        }
+
         return false;
     }
 }

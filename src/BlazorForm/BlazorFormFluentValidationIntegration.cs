@@ -18,6 +18,9 @@ public static class BlazorFormFluentValidationIntegration
     public static BlazorFormState UseFluentValidation<TModel>(this BlazorFormState state, IValidator<TModel> validator)
         where TModel : class
     {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(validator);
+
         state.ExternalValidator = (_, data, _) =>
         {
             if (data.Root is not TModel model)
@@ -28,22 +31,38 @@ public static class BlazorFormFluentValidationIntegration
     }
 
     /// <summary>
-    /// Resolves <c>IValidator&lt;TModel&gt;</c> for the form's <see cref="BlazorFormDefinition.ModelType"/>
-    /// from the service provider and registers it as the external validator.
+    /// Resolves <c>IValidator&lt;TModel&gt;</c> from the service provider and registers it as the
+    /// external validator. The model type comes from <see cref="BlazorFormDefinition.ModelType"/>, or
+    /// — for a schema built without one — from the runtime type of the bound model.
     /// </summary>
-    public static BlazorFormState UseFluentValidation(this BlazorFormState state)
+    /// <param name="state">The form state to attach to.</param>
+    /// <param name="throwIfMissing">
+    /// When true, a missing <c>IValidator&lt;T&gt;</c> registration throws instead of silently
+    /// validating nothing. Useful in development, where a forgotten registration otherwise looks like
+    /// a form with no rules at all.
+    /// </param>
+    public static BlazorFormState UseFluentValidation(this BlazorFormState state, bool throwIfMissing = false)
     {
+        ArgumentNullException.ThrowIfNull(state);
+
         state.ExternalValidator = async (form, data, services) =>
         {
-            if (form.ModelType is null || data.Root is null || services is null)
+            if (data.Root is null || services is null)
                 return Array.Empty<BlazorFormValidationMessage>();
 
-            var validatorType = typeof(IValidator<>).MakeGenericType(form.ModelType);
+            var modelType = form.ModelType ?? data.Root.GetType();
+            var validatorType = typeof(IValidator<>).MakeGenericType(modelType);
+
             if (services.GetService(validatorType) is not IValidator validator)
-                return Array.Empty<BlazorFormValidationMessage>();
+            {
+                return throwIfMissing
+                    ? throw new InvalidOperationException(
+                        $"No IValidator<{modelType.Name}> is registered. Register one, or pass the validator " +
+                        "explicitly with UseFluentValidation(validator).")
+                    : (IReadOnlyList<BlazorFormValidationMessage>)Array.Empty<BlazorFormValidationMessage>();
+            }
 
-            var context = new FvContext(data.Root);
-            var result = await validator.ValidateAsync(context);
+            var result = await validator.ValidateAsync(new FvContext(data.Root));
             return Map(result);
         };
         return state;

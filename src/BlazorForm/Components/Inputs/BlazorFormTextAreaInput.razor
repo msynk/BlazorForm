@@ -1,16 +1,36 @@
 @namespace BlazorForm
 @inherits BlazorFormInputBase
 
-<textarea id="@Context.ElementId"
+@* Splat first so the renderer's own attributes below always win. *@
+<textarea @attributes="ExtraAttributes"
+          id="@Context.ElementId"
+          @ref="Element"
           class="@CssClass"
           placeholder="@Field.Placeholder"
           disabled="@Disabled"
-          readonly="@Field.ReadOnly"
+          readonly="@ReadOnly"
           maxlength="@Field.MaxLength"
           rows="@Rows"
+          autocomplete="@Field.Autocomplete"
+          aria-required="@AriaRequired"
+          aria-invalid="@AriaInvalid"
+          aria-label="@AriaLabel"
+          aria-describedby="@DescribedBy"
           @onchange="OnChange"
+          @oninput="InputHandler"
           @onblur="OnBlur">@Context.StringValue</textarea>
 
+@if (ShowCounter)
+{
+    <p class="ff-counter @(Length > Field.MaxLength ? "ff-counter--over" : "")" aria-hidden="true">
+        @Context.Text(BlazorFormMessageKeys.CharacterCount, Length, Field.MaxLength)
+    </p>
+}
+
 @code {
-    private int Rows => Field.Attributes.TryGetValue("rows", out var r) && r is int i ? i : 4;
+    private int Rows => Attr("rows", 4);
+
+    private bool ShowCounter => Field.ShowCharacterCount && Field.MaxLength is > 0;
+
+    private int Length => DisplayLength;
 }

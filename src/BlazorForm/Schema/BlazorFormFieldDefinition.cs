@@ -30,10 +30,32 @@ public sealed class BlazorFormFieldDefinition
     /// <summary>Help/hint text shown beneath the field.</summary>
     public string? HelpText { get; set; }
 
+    /// <summary>
+    /// Whether the field's label is rendered. Set false for a control that is already labelled by its
+    /// surroundings — a search box under a heading that says "Search" — so the label is not announced
+    /// twice. The label still exists for assistive technology via <c>aria-label</c>.
+    /// </summary>
+    public bool ShowLabel { get; set; } = true;
+
+    /// <summary>
+    /// Static text rendered inside the control, before the input — a currency symbol, a protocol, an
+    /// <c>@</c>. Presentational only: it is never part of the value.
+    /// </summary>
+    public string? Prefix { get; set; }
+
+    /// <summary>Static text rendered after the input — a unit such as <c>kg</c> or <c>%</c>.</summary>
+    public string? Suffix { get; set; }
+
+    /// <summary>
+    /// Shows a "42 / 200" counter beneath a field that has a <see cref="MaxLength"/>, so the user can
+    /// see the limit approaching instead of discovering it when typing stops working.
+    /// </summary>
+    public bool ShowCharacterCount { get; set; }
+
     /// <summary>Whether the field must have a value. Also added as a validation rule when built.</summary>
     public bool Required { get; set; }
 
-    /// <summary>Whether the field is read-only.</summary>
+    /// <summary>Whether the field is read-only. Read-only fields render as <c>readonly</c>, not <c>disabled</c>.</summary>
     public bool ReadOnly { get; set; }
 
     /// <summary>Default value applied when the form initialises and the value is missing.</summary>
@@ -48,6 +70,33 @@ public sealed class BlazorFormFieldDefinition
     /// <summary>Options for select/radio/multiselect fields.</summary>
     public IList<BlazorFormSelectOption> Options { get; set; } = new List<BlazorFormSelectOption>();
 
+    /// <summary>
+    /// Loads <see cref="Options"/> on demand, for choices that come from a service or that depend on
+    /// another field's value (cascading selects). Re-runs whenever a path in
+    /// <see cref="OptionsDependencies"/> changes.
+    /// </summary>
+    public BlazorFormOptionsProvider? OptionsProvider { get; set; }
+
+    /// <summary>Field paths whose values <see cref="OptionsProvider"/> reads, so options reload when they change.</summary>
+    public IList<string> OptionsDependencies { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Suggested values offered through a <c>&lt;datalist&gt;</c>. Unlike <see cref="Options"/> these
+    /// only propose — the field still accepts anything the user types — which is the difference between
+    /// "here are the usual answers" and a closed set of choices. Maps to JSON Schema's <c>examples</c>.
+    /// </summary>
+    public IList<string> Suggestions { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Derives this field's value from the rest of the form — an order total, a full name, a price
+    /// after discount. Recomputed whenever a path in <see cref="ComputedDependencies"/> changes, and
+    /// once when the form is created.
+    /// </summary>
+    public BlazorFormComputedValue? Computed { get; set; }
+
+    /// <summary>Field paths <see cref="Computed"/> reads. Empty means "recompute on any change".</summary>
+    public IList<string> ComputedDependencies { get; set; } = new List<string>();
+
     // --- Constraints (also surfaced as native input attributes) ---
     public int? MinLength { get; set; }
     public int? MaxLength { get; set; }
@@ -60,12 +109,63 @@ public sealed class BlazorFormFieldDefinition
     public bool Multiple { get; set; }
     public string? Accept { get; set; }
 
+    /// <summary>Maximum size, in bytes, of each selected file. Null means no limit.</summary>
+    public long? MaxFileSize { get; set; }
+
+    // --- Input hints ---
+    /// <summary>Value for the HTML <c>autocomplete</c> attribute, e.g. <c>email</c> or <c>new-password</c>.</summary>
+    public string? Autocomplete { get; set; }
+
+    /// <summary>Value for the HTML <c>inputmode</c> attribute, e.g. <c>numeric</c> or <c>tel</c>.</summary>
+    public string? InputMode { get; set; }
+
+    /// <summary>When true, the rendered control requests focus on first render.</summary>
+    public bool Autofocus { get; set; }
+
+    /// <summary>
+    /// Which DOM event writes the value back. <see cref="BlazorFormUpdateTrigger.Change"/> (the default)
+    /// waits for the browser's <c>change</c> event, which for a text box means blur;
+    /// <see cref="BlazorFormUpdateTrigger.Input"/> updates on every keystroke, which is what makes
+    /// live counters, computed values and as-you-type validation feel immediate.
+    /// </summary>
+    public BlazorFormUpdateTrigger UpdateOn { get; set; } = BlazorFormUpdateTrigger.Change;
+
+    /// <summary>
+    /// How long to wait after the last keystroke before writing the value, in milliseconds. Only
+    /// meaningful with <see cref="BlazorFormUpdateTrigger.Input"/>; 0 (the default) writes immediately.
+    /// </summary>
+    public int DebounceMilliseconds { get; set; }
+
+    /// <summary>
+    /// Extra HTML attributes splatted onto the rendered control — <c>data-*</c> hooks, <c>title</c>,
+    /// <c>spellcheck</c>, <c>maxlength</c> overrides. Attributes the renderer sets itself win, so this
+    /// can never break the accessibility wiring.
+    /// </summary>
+    public IDictionary<string, object?> InputAttributes { get; set; } = new Dictionary<string, object?>();
+
+    /// <summary>
+    /// How many columns the field spans in a grid layout. Null uses the layout's default (full width).
+    /// </summary>
+    public int? ColumnSpan { get; set; }
+
     // --- Conditional behaviour ---
     /// <summary>When set and evaluates false, the field is hidden and excluded from validation.</summary>
     public IBlazorFormCondition? VisibleWhen { get; set; }
 
     /// <summary>When set and evaluates true, the field is disabled.</summary>
     public IBlazorFormCondition? DisabledWhen { get; set; }
+
+    /// <summary>
+    /// When set, the field is required only while the condition holds. Evaluated in addition to
+    /// <see cref="Required"/>, so a field can be conditionally mandatory without a bespoke rule.
+    /// </summary>
+    public IBlazorFormCondition? RequiredWhen { get; set; }
+
+    /// <summary>
+    /// When true, the field's value is cleared as soon as <see cref="VisibleWhen"/> turns false, so a
+    /// hidden branch never contributes stale data to the submitted model.
+    /// </summary>
+    public bool ClearOnHide { get; set; }
 
     /// <summary>Validation rules applied to this field.</summary>
     public IList<IBlazorFormValidationRule> Validators { get; set; } = new List<IBlazorFormValidationRule>();
@@ -92,4 +192,68 @@ public sealed class BlazorFormFieldDefinition
 
     /// <summary>Convenience: is this a container (object or array)?</summary>
     public bool IsContainer => Type is BlazorFormFieldType.Object or BlazorFormFieldType.Array;
+
+    /// <summary>
+    /// True when the field holds no value at all. Presentational content has a name only so the schema
+    /// can address it; nothing should try to read, write, default, reset or validate it, and a model
+    /// bound to the form has no property of that name to receive it.
+    /// </summary>
+    public bool IsPresentational => Type is BlazorFormFieldType.Static;
+
+    /// <summary>True when the field renders a set of choices.</summary>
+    public bool IsChoice => Type is BlazorFormFieldType.Select or BlazorFormFieldType.MultiSelect or BlazorFormFieldType.Radio;
+
+    /// <summary>
+    /// Adds a validation rule, replacing any existing rule that reports the same
+    /// <see cref="IBlazorFormValidationRule.Key"/>. This is what stops a model that carries
+    /// <c>[Required]</c> and is then refined with <c>.Required("…")</c> from showing the user the same
+    /// complaint twice; the later call wins, so an explicit message always overrides the generated one.
+    /// Rules without a key (delegates, custom rules) always accumulate.
+    /// </summary>
+    public BlazorFormFieldDefinition AddValidator(IBlazorFormValidationRule rule)
+    {
+        if (rule.Key is { } key)
+        {
+            for (var i = 0; i < Validators.Count; i++)
+            {
+                if (string.Equals(Validators[i].Key, key, StringComparison.Ordinal))
+                {
+                    Validators[i] = rule;
+                    return this;
+                }
+            }
+        }
+        Validators.Add(rule);
+        return this;
+    }
+
+    /// <summary>Removes every rule reporting <paramref name="key"/>. Returns true if any were removed.</summary>
+    public bool RemoveValidators(string key)
+    {
+        var removed = false;
+        for (var i = Validators.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(Validators[i].Key, key, StringComparison.Ordinal))
+            {
+                Validators.RemoveAt(i);
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>Fields directly beneath this one: object children, or the array item template.</summary>
+    public IEnumerable<BlazorFormFieldDefinition> Descendants()
+    {
+        foreach (var child in Children)
+        {
+            yield return child;
+            foreach (var d in child.Descendants()) yield return d;
+        }
+        if (ItemTemplate is not null)
+        {
+            yield return ItemTemplate;
+            foreach (var d in ItemTemplate.Descendants()) yield return d;
+        }
+    }
 }

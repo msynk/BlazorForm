@@ -2,29 +2,82 @@
 @inherits BlazorFormInputBase
 @using System.Collections
 
-<div class="ff-multiselect">
-    @foreach (var opt in Field.Options)
+@* See BlazorFormRadioInput: the group is named by the rendered label when one exists, and inline
+   otherwise, so suppressing the visible label never leaves the group without an accessible name. *@
+@* See BlazorFormRadioInput on the tabindex: the group is what focus aims at, because no single
+   checkbox in it represents the field. *@
+<div class="ff-multiselect"
+     @ref="Element"
+     tabindex="-1"
+     role="group"
+     aria-labelledby="@(Field.ShowLabel ? Context.LabelId : null)"
+     aria-label="@AriaLabel"
+     aria-required="@AriaRequired"
+     aria-invalid="@AriaInvalid"
+     aria-describedby="@DescribedBy">
+    @foreach (var opt in Context.Options)
     {
-        <label class="ff-checkbox">
+        var optionId = $"{Context.ElementId}_{Sanitize(opt.Value)}";
+        <label class="ff-checkbox" for="@optionId">
             <input type="checkbox"
+                   id="@optionId"
                    value="@opt.Value"
                    checked="@Selected.Contains(opt.Value)"
-                   disabled="@(Disabled || opt.Disabled)"
-                   @onchange="@(e => Toggle(opt.Value, e.Value is bool b && b))" />
+                   disabled="@(DisabledOrReadOnly || opt.Disabled)"
+                   @onchange="@(e => Toggle(opt.Value, e.Value is bool b && b))"
+                   @onblur="OnBlur" />
             <span>@opt.Label</span>
         </label>
     }
 </div>
 
 @code {
+    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+
+    /// <summary>The underlying enum type when this field is backed by a [Flags] enum, otherwise null.</summary>
+    private Type? FlagsEnumType
+    {
+        get
+        {
+            if (Field.ValueType is not { } t) return null;
+            var underlying = Nullable.GetUnderlyingType(t) ?? t;
+            return underlying.IsEnum && underlying.IsDefined(typeof(FlagsAttribute), false) ? underlying : null;
+        }
+    }
+
+    /// <summary>
+    /// The currently selected option values. A [Flags] enum stores one combined value rather than a
+    /// collection, so it is decomposed back into the individual member names.
+    /// </summary>
     private HashSet<string> Selected
     {
         get
         {
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            if (Context.Value is IEnumerable e and not string)
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var value = Context.Value;
+            if (value is null) return set;
+
+            if (FlagsEnumType is { } flags)
+            {
+                if (!Enum.IsDefined(flags, value) && value is not Enum) return set;
+                foreach (var name in Enum.GetNames(flags))
+                {
+                    var member = (Enum)Enum.Parse(flags, name);
+                    // Zero-valued members ("None") would otherwise report as always selected.
+                    if (BlazorFormEnumOptions.ToInt64(member) != 0 && ((Enum)value).HasFlag(member)) set.Add(name);
+                }
+                return set;
+            }
+
+            if (value is IEnumerable e and not string)
+            {
                 foreach (var item in e)
-                    if (item is not null) set.Add(item.ToString()!);
+                    if (item is not null) set.Add(BlazorFormValueConverter.ToInvariantString(item));
+            }
+            else
+            {
+                set.Add(BlazorFormValueConverter.ToInvariantString(value));
+            }
             return set;
         }
     }
@@ -33,6 +86,25 @@
     {
         var set = Selected;
         if (isChecked) set.Add(value); else set.Remove(value);
+
+        if (FlagsEnumType is { } flags)
+        {
+            // Recombine the chosen members into the single value the property expects.
+            long combined = 0;
+            foreach (var name in set)
+                if (Enum.TryParse(flags, name, ignoreCase: true, out var member) && member is not null)
+                    combined |= BlazorFormEnumOptions.ToInt64(member);
+            return Context.SetValueAsync(Enum.ToObject(flags, combined));
+        }
+
+        // A plain list of strings; the data accessor converts each element to the model's element type.
         return Context.SetValueAsync(set.ToList());
     }
+
+    private static string Sanitize(string value)
+        => string.Create(value.Length, value, static (span, v) =>
+        {
+            for (var i = 0; i < v.Length; i++)
+                span[i] = char.IsLetterOrDigit(v[i]) ? v[i] : '_';
+        });
 }

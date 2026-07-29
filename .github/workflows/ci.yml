@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore src/BlazorForm.slnx
+
+      # Warnings are treated as errors here rather than in the project file, so a local build stays
+      # workable while CI still refuses to let one through.
+      - name: Build
+        run: dotnet build src/BlazorForm.slnx --configuration Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test src/BlazorForm.Tests/BlazorForm.Tests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack src/BlazorForm/BlazorForm.csproj --configuration Release --no-build --output ./artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.nupkg

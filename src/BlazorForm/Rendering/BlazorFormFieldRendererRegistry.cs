@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Components;
+
 namespace BlazorForm;
 
 /// <inheritdoc />
@@ -27,18 +29,53 @@ public sealed class BlazorFormFieldRendererRegistry : IBlazorFormFieldRendererRe
         Register(BlazorFormFieldType.Date, typeof(BlazorFormDateInput));
         Register(BlazorFormFieldType.DateTime, typeof(BlazorFormDateInput));
         Register(BlazorFormFieldType.Time, typeof(BlazorFormDateInput));
+        Register(BlazorFormFieldType.File, typeof(BlazorFormFileInput));
+        Register(BlazorFormFieldType.Static, typeof(BlazorFormStaticContent));
     }
 
-    public void Register(BlazorFormFieldType type, Type componentType) => _byType[type] = componentType;
+    public void Register(BlazorFormFieldType type, Type componentType)
+    {
+        EnsureComponent(componentType);
+        _byType[type] = componentType;
+    }
 
-    public void RegisterCustom(string key, Type componentType) => _byKey[key] = componentType;
+    public void RegisterCustom(string key, Type componentType)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        EnsureComponent(componentType);
+        _byKey[key] = componentType;
+    }
+
+    public bool TryResolve(BlazorFormFieldDefinition field, out Type componentType)
+    {
+        // An explicit renderer key always wins, so a field can opt out of its type's default widget.
+        if (field.CustomRenderer is { Length: > 0 } key && _byKey.TryGetValue(key, out var custom))
+        {
+            componentType = custom;
+            return true;
+        }
+        return _byType.TryGetValue(field.Type, out componentType!);
+    }
 
     public Type Resolve(BlazorFormFieldDefinition field)
     {
-        if (field.CustomRenderer is { } key && _byKey.TryGetValue(key, out var custom))
-            return custom;
-        if (_byType.TryGetValue(field.Type, out var type))
-            return type;
+        if (TryResolve(field, out var componentType)) return componentType;
+
+        if (field.Type == BlazorFormFieldType.Custom)
+        {
+            throw new InvalidOperationException(
+                $"Field '{field.Name}' uses the custom renderer key '{field.CustomRenderer}', which is not registered. " +
+                "Register it with services.AddBlazorForm(r => r.RegisterCustom(\"" + field.CustomRenderer + "\", typeof(MyComponent))).");
+        }
+
+        // Any other unmapped type still renders something usable rather than nothing.
         return typeof(BlazorFormTextInput);
+    }
+
+    private static void EnsureComponent(Type componentType)
+    {
+        ArgumentNullException.ThrowIfNull(componentType);
+        if (!typeof(IComponent).IsAssignableFrom(componentType))
+            throw new ArgumentException($"'{componentType}' is not a Blazor component.", nameof(componentType));
     }
 }

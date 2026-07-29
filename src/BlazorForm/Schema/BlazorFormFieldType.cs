@@ -63,6 +63,13 @@ public enum BlazorFormFieldType
     /// <summary>Hidden value, not displayed.</summary>
     Hidden,
 
+    /// <summary>
+    /// Presentational content — a section heading, an explanatory paragraph, a divider. It binds to no
+    /// value and is never validated; it exists because a real form is not only inputs, and splitting a
+    /// long one into titled sections otherwise means giving up on describing it as a schema.
+    /// </summary>
+    Static,
+
     /// <summary>A nested object: a group of child fields bound to a sub-object.</summary>
     Object,
 

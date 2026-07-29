@@ -54,7 +54,7 @@
                 .VisibleWhen("AccountKind", BlazorFormConditionOperator.Equals, "Business"))
             .Field(x => x.AcceptTerms, f => f
                 .Label("I accept the terms and conditions")
-                .Must(v => v is true, "You must accept the terms to continue."))
+                .Required("You must accept the terms to continue."))
             .Build();
     }
 
@@ -88,7 +88,7 @@
                 .VisibleWhen("AccountKind", BlazorFormConditionOperator.Equals, "Business"))
             .Field(x => x.AcceptTerms, f => f
                 .Label("I accept the terms and conditions")
-                .Must(v => v is true, "You must accept the terms to continue."))
+                .Required("You must accept the terms to continue."))
             .Build();
     }
 

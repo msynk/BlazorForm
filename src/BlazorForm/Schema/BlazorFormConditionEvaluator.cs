@@ -1,6 +1,4 @@
 using System.Collections;
-using System.Globalization;
-using System.Text.RegularExpressions;
 
 namespace BlazorForm;
 
@@ -10,51 +8,33 @@ namespace BlazorForm;
 /// </summary>
 public static class BlazorFormConditionEvaluator
 {
-    public static bool Compare(object? actual, BlazorFormConditionOperator op, object? expected)
+    public static bool Compare(object? actual, BlazorFormConditionOperator op, object? expected) => op switch
     {
-        switch (op)
-        {
-            case BlazorFormConditionOperator.IsEmpty:
-                return IsEmpty(actual);
-            case BlazorFormConditionOperator.IsNotEmpty:
-                return !IsEmpty(actual);
-            case BlazorFormConditionOperator.IsTrue:
-                return AsBool(actual) == true;
-            case BlazorFormConditionOperator.IsFalse:
-                return AsBool(actual) == false;
-            case BlazorFormConditionOperator.Equals:
-                return LooseEquals(actual, expected);
-            case BlazorFormConditionOperator.NotEquals:
-                return !LooseEquals(actual, expected);
-            case BlazorFormConditionOperator.GreaterThan:
-                return TryCompareNumeric(actual, expected, out var g) && g > 0;
-            case BlazorFormConditionOperator.GreaterThanOrEqual:
-                return TryCompareNumeric(actual, expected, out var ge) && ge >= 0;
-            case BlazorFormConditionOperator.LessThan:
-                return TryCompareNumeric(actual, expected, out var l) && l < 0;
-            case BlazorFormConditionOperator.LessThanOrEqual:
-                return TryCompareNumeric(actual, expected, out var le) && le <= 0;
-            case BlazorFormConditionOperator.Contains:
-                return Contains(actual, expected);
-            case BlazorFormConditionOperator.NotContains:
-                return !Contains(actual, expected);
-            case BlazorFormConditionOperator.In:
-                return In(actual, expected);
-            case BlazorFormConditionOperator.NotIn:
-                return !In(actual, expected);
-            case BlazorFormConditionOperator.Matches:
-                return expected is not null &&
-                       actual is not null &&
-                       Regex.IsMatch(actual.ToString() ?? string.Empty, expected.ToString() ?? string.Empty);
-            default:
-                return false;
-        }
-    }
+        BlazorFormConditionOperator.IsEmpty => IsEmpty(actual),
+        BlazorFormConditionOperator.IsNotEmpty => !IsEmpty(actual),
+        BlazorFormConditionOperator.IsTrue => AsBool(actual) == true,
+        BlazorFormConditionOperator.IsFalse => AsBool(actual) == false,
+        BlazorFormConditionOperator.Equals => LooseEquals(actual, expected),
+        BlazorFormConditionOperator.NotEquals => !LooseEquals(actual, expected),
+        BlazorFormConditionOperator.GreaterThan => TryCompare(actual, expected, out var g) && g > 0,
+        BlazorFormConditionOperator.GreaterThanOrEqual => TryCompare(actual, expected, out var ge) && ge >= 0,
+        BlazorFormConditionOperator.LessThan => TryCompare(actual, expected, out var l) && l < 0,
+        BlazorFormConditionOperator.LessThanOrEqual => TryCompare(actual, expected, out var le) && le <= 0,
+        BlazorFormConditionOperator.Contains => Contains(actual, expected),
+        BlazorFormConditionOperator.NotContains => !Contains(actual, expected),
+        BlazorFormConditionOperator.In => In(actual, expected),
+        BlazorFormConditionOperator.NotIn => !In(actual, expected),
+        BlazorFormConditionOperator.StartsWith => StartsOrEnds(actual, expected, start: true),
+        BlazorFormConditionOperator.EndsWith => StartsOrEnds(actual, expected, start: false),
+        BlazorFormConditionOperator.Matches => Matches(actual, expected),
+        _ => false
+    };
 
     private static bool IsEmpty(object? value) => value switch
     {
         null => true,
         string s => string.IsNullOrWhiteSpace(s),
+        ICollection c => c.Count == 0,
         IEnumerable e and not string => !e.Cast<object?>().Any(),
         _ => false
     };
@@ -72,24 +52,41 @@ public static class BlazorFormConditionEvaluator
         if (a is null || b is null) return false;
         if (a.Equals(b)) return true;
 
-        if (TryToDouble(a, out var da) && TryToDouble(b, out var db))
+        // Numbers compare numerically (1 == 1.0 == "1"), everything else by invariant text.
+        if (BlazorFormNumber.TryToDouble(a, out var da) && BlazorFormNumber.TryToDouble(b, out var db))
             return da.Equals(db);
 
-        return string.Equals(a.ToString(), b.ToString(), StringComparison.OrdinalIgnoreCase);
+        return string.Equals(
+            BlazorFormValueConverter.ToInvariantString(a),
+            BlazorFormValueConverter.ToInvariantString(b),
+            StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryCompareNumeric(object? a, object? b, out int result)
+    private static bool TryCompare(object? a, object? b, out int result)
     {
         result = 0;
-        if (TryToDouble(a, out var da) && TryToDouble(b, out var db))
+        if (a is null || b is null) return false;
+
+        if (BlazorFormNumber.TryToDouble(a, out var da) && BlazorFormNumber.TryToDouble(b, out var db))
         {
             result = da.CompareTo(db);
             return true;
         }
-        if (a is IComparable ca && b is not null && a.GetType() == b.GetType())
+
+        // Dates and other IComparable values: coerce the expected operand to the actual value's type
+        // so a condition authored as the string "2024-01-01" still compares against a DateTime.
+        if (a is IComparable ca)
         {
-            result = ca.CompareTo(b);
-            return true;
+            if (a.GetType() == b.GetType())
+            {
+                result = ca.CompareTo(b);
+                return true;
+            }
+            if (BlazorFormValueConverter.TryCoerce(b, a.GetType(), out var coerced) && coerced is not null)
+            {
+                result = ca.CompareTo(coerced);
+                return true;
+            }
         }
         return false;
     }
@@ -97,10 +94,9 @@ public static class BlazorFormConditionEvaluator
     private static bool Contains(object? actual, object? expected)
     {
         if (expected is null) return false;
-        var needle = expected.ToString() ?? string.Empty;
 
         if (actual is string s)
-            return s.Contains(needle, StringComparison.OrdinalIgnoreCase);
+            return s.Contains(BlazorFormValueConverter.ToInvariantString(expected), StringComparison.OrdinalIgnoreCase);
 
         if (actual is IEnumerable e and not string)
             return e.Cast<object?>().Any(x => LooseEquals(x, expected));
@@ -115,30 +111,23 @@ public static class BlazorFormConditionEvaluator
         return LooseEquals(actual, expected);
     }
 
-    private static bool TryToDouble(object? value, out double result)
+    private static bool StartsOrEnds(object? actual, object? expected, bool start)
     {
-        switch (value)
-        {
-            case null:
-                result = 0;
-                return false;
-            case double d:
-                result = d;
-                return true;
-            case float f:
-                result = f;
-                return true;
-            case int i:
-                result = i;
-                return true;
-            case long l:
-                result = l;
-                return true;
-            case decimal m:
-                result = (double)m;
-                return true;
-            default:
-                return double.TryParse(value.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out result);
-        }
+        if (actual is null || expected is null) return false;
+        var haystack = BlazorFormValueConverter.ToInvariantString(actual);
+        var needle = BlazorFormValueConverter.ToInvariantString(expected);
+        return start
+            ? haystack.StartsWith(needle, StringComparison.OrdinalIgnoreCase)
+            : haystack.EndsWith(needle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool Matches(object? actual, object? expected)
+    {
+        if (actual is null || expected is null) return false;
+        // Patterns can come from untrusted JSON: compiled with a timeout, and a pattern that neither
+        // compiles nor completes simply does not match rather than taking the render down.
+        var regex = BlazorFormRegex.Create(BlazorFormValueConverter.ToInvariantString(expected));
+        if (regex is null) return false;
+        return BlazorFormRegex.IsMatch(regex, BlazorFormValueConverter.ToInvariantString(actual)) == true;
     }
 }

@@ -1,12 +1,22 @@
 @namespace BlazorForm
 @inherits BlazorFormInputBase
 
-<select id="@Context.ElementId"
+@* Splat first so the renderer's own attributes below always win. *@
+<select @attributes="ExtraAttributes"
+        id="@Context.ElementId"
+        @ref="Element"
         class="@CssClass"
-        disabled="@Disabled"
+        disabled="@(DisabledOrReadOnly || Context.IsLoadingOptions)"
         value="@Context.StringValue"
-        @onchange="OnChange">
-    <option value="">@(Field.Placeholder ?? "-- Select --")</option>
+        autocomplete="@Field.Autocomplete"
+        aria-required="@AriaRequired"
+        aria-invalid="@AriaInvalid"
+        aria-label="@AriaLabel"
+        aria-busy="@(Context.IsLoadingOptions ? "true" : null)"
+        aria-describedby="@DescribedBy"
+        @onchange="OnSelectionChanged"
+        @onblur="OnBlur">
+    <option value="">@PlaceholderText</option>
     @foreach (var group in Grouped)
     {
         @if (group.Key is null)
@@ -29,6 +39,18 @@
 </select>
 
 @code {
+    // Options may come from an async provider, so ask for them on first render and again whenever a
+    // dependency change has invalidated the cache.
+    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+
+    // A select fires `change` when the user picks, never `input`, so it always writes on change
+    // regardless of the field's update trigger — "as you type" has no meaning for a dropdown.
+    private Task OnSelectionChanged(ChangeEventArgs e) => Context.SetFromStringAsync(e.Value?.ToString());
+
+    private string PlaceholderText => Context.IsLoadingOptions
+        ? Context.Text(BlazorFormMessageKeys.SelectLoading)
+        : Field.Placeholder ?? Context.Text(BlazorFormMessageKeys.SelectPlaceholder);
+
     private IEnumerable<IGrouping<string?, BlazorFormSelectOption>> Grouped
-        => Field.Options.GroupBy(o => o.Group);
+        => Context.Options.GroupBy(o => o.Group);
 }

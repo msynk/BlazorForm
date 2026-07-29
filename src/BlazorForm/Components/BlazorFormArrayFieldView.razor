@@ -1,33 +1,41 @@
 @namespace BlazorForm
 
-<div class="ff-array">
-    <div class="ff-array__header">
-        <span class="ff-array__title">@(Field.Label ?? Field.Name)</span>
-        @if (Field.Required)
+<fieldset class="ff-array" disabled="@Locked" aria-describedby="@DescribedBy">
+    <legend class="ff-array__header">
+        <span class="ff-array__title">@Title</span>
+        @if (State.IsRequired(Field, Path))
         {
             <span class="ff-required" aria-hidden="true">*</span>
         }
-    </div>
+        @if (Count > 0)
+        {
+            <span class="ff-array__count">@Count</span>
+        }
+    </legend>
+
     @if (!string.IsNullOrEmpty(Field.HelpText))
     {
-        <p class="ff-help">@Field.HelpText</p>
+        <p class="ff-help" id="@HelpId">@Field.HelpText</p>
     }
 
-    @{
-        var count = State.ArrayCount(Path);
-    }
-
-    @if (count == 0)
+    @if (Count == 0)
     {
-        <p class="ff-array__empty">No items yet.</p>
+        <p class="ff-array__empty">@EmptyText</p>
     }
 
-    @for (var index = 0; index < count; index++)
+    @* One live region for the whole repeater, announcing the count after add/remove/reorder. Without
+       it a screen-reader user presses "Add" and hears nothing at all. *@
+    <p class="ff-sr-only" aria-live="polite">@Announcement</p>
+
+    @for (var index = 0; index < Count; index++)
     {
         var i = index;
         var itemPath = BlazorFormPath.Combine(Path, i);
-        <div class="ff-array__item" @key="i">
+        @* Keyed by the item instance where possible so reordering moves the DOM node with its data
+           instead of rewriting every row's contents. *@
+        <div class="ff-array__item" @key="KeyFor(i)">
             <div class="ff-array__item-body">
+                <span class="ff-array__item-index" aria-hidden="true">@(i + 1)</span>
                 @if (Template.Type == BlazorFormFieldType.Object)
                 {
                     @foreach (var child in Template.Children.OrderBy(c => c.Order))
@@ -41,24 +49,38 @@
                 }
             </div>
             <div class="ff-array__item-actions">
-                <button type="button" class="ff-btn ff-btn--icon" title="Move up"
-                        disabled="@(i == 0)" @onclick="@(() => State.MoveArrayItem(Path, i, i - 1))">↑</button>
-                <button type="button" class="ff-btn ff-btn--icon" title="Move down"
-                        disabled="@(i == count - 1)" @onclick="@(() => State.MoveArrayItem(Path, i, i + 1))">↓</button>
-                <button type="button" class="ff-btn ff-btn--danger" title="Remove"
-                        @onclick="@(() => State.RemoveArrayItem(Path, i))">Remove</button>
+                @{
+                    var moveUp = State.Text(BlazorFormMessageKeys.ArrayMoveUp, ItemNoun, i + 1);
+                    var moveDown = State.Text(BlazorFormMessageKeys.ArrayMoveDown, ItemNoun, i + 1);
+                    var duplicate = State.Text(BlazorFormMessageKeys.ArrayDuplicate, ItemNoun, i + 1);
+                    var remove = State.Text(BlazorFormMessageKeys.ArrayRemove, ItemNoun, i + 1);
+                }
+                @if (Reorderable)
+                {
+                    <button type="button" class="ff-btn ff-btn--icon" title="@moveUp" aria-label="@moveUp"
+                            disabled="@(i == 0)" @onclick="@(() => State.MoveArrayItem(Path, i, i - 1))">↑</button>
+                    <button type="button" class="ff-btn ff-btn--icon" title="@moveDown" aria-label="@moveDown"
+                            disabled="@(i == Count - 1)" @onclick="@(() => State.MoveArrayItem(Path, i, i + 1))">↓</button>
+                }
+                @if (Duplicable)
+                {
+                    <button type="button" class="ff-btn ff-btn--icon" title="@duplicate" aria-label="@duplicate"
+                            disabled="@(!CanAdd)" @onclick="@(() => State.DuplicateArrayItem(Field, Path, i))">⧉</button>
+                }
+                @* Short visible text, full accessible name: a screen reader needs to know *which* row
+                   the button removes, a sighted user can see it. *@
+                <button type="button" class="ff-btn ff-btn--danger" title="@remove" aria-label="@remove"
+                        disabled="@(!CanRemove)" @onclick="@(() => State.RemoveArrayItem(Path, i))">@RemoveText</button>
             </div>
         </div>
     }
 
-    <button type="button" class="ff-btn ff-btn--add"
-            disabled="@(Field.MaxItems is { } max && count >= max)"
-            @onclick="Add">
-        + Add @ItemNoun
+    <button type="button" class="ff-btn ff-btn--add" disabled="@(!CanAdd)" @onclick="Add">
+        @State.Text(BlazorFormMessageKeys.ArrayAdd, ItemNoun)
     </button>
 
-    <BlazorFormValidationMessages Messages="State.MessagesFor(Path)" Show="true" />
-</div>
+    <BlazorFormValidationMessages Messages="State.MessagesFor(Path)" Show="ShowMessages" Id="@ErrorId" />
+</fieldset>
 
 @code {
     [Parameter, EditorRequired] public BlazorFormState State { get; set; } = default!;
@@ -66,9 +88,80 @@
     [Parameter, EditorRequired] public string Path { get; set; } = default!;
 
     private BlazorFormFieldDefinition Template => Field.ItemTemplate
-        ?? throw new InvalidOperationException($"Array field '{Field.Name}' has no item template.");
+        ?? throw new InvalidOperationException(
+            $"Array field '{Field.Name}' has no item template. Set {nameof(BlazorFormFieldDefinition.ItemTemplate)} " +
+            "or build the field with the fluent builder's Array(...) overload, which creates one for you.");
 
-    private string ItemNoun => Field.Attributes.TryGetValue("itemNoun", out var n) && n is string s ? s : "item";
+    private int Count => State.ArrayCount(Path);
+
+    private string Title => Field.Label ?? Field.Name;
+
+    private string ItemNoun => Field.Attributes.TryGetValue("itemNoun", out var n) && n is string s && s.Length > 0
+        ? s
+        : State.Text(BlazorFormMessageKeys.ArrayItem);
+
+    private string EmptyText => Field.Attributes.TryGetValue("emptyText", out var t) && t is string s && s.Length > 0
+        ? s
+        : State.Text(BlazorFormMessageKeys.ArrayEmpty, ItemNoun);
+
+    private string RemoveText => State.Text(BlazorFormMessageKeys.ArrayRemoveShort);
+
+    /// <summary>Whether the up/down buttons are offered — <c>Attr("reorderable", false)</c> hides them.</summary>
+    private bool Reorderable => Field.Attributes.TryGetValue("reorderable", out var r) ? r is not false : true;
+
+    /// <summary>Whether a "duplicate this row" button is offered — <c>Attr("duplicable", true)</c>.</summary>
+    private bool Duplicable => Field.Attributes.TryGetValue("duplicable", out var d) && d is true;
+
+    /// <summary>
+    /// What the live region says. It changes with the count, which is what makes the region announce;
+    /// an identical string would be ignored by every screen reader.
+    /// </summary>
+    private string Announcement => Count == 0 ? "" : State.Text(BlazorFormMessageKeys.ArrayCount, Count, ItemNoun);
+
+    /// <summary>Read-only or conditionally-disabled arrays cannot be edited, added to or reordered.</summary>
+    private bool Locked => State.IsDisabled(Field, Path) || State.IsReadOnly(Field);
+
+    private bool CanAdd => !Locked && State.CanAddArrayItem(Field, Path);
+
+    private bool CanRemove => !Locked && State.CanRemoveArrayItem(Field, Path);
+
+    private bool ShowMessages => State.IsTouched(Path) || State.IsSubmitted;
+
+    private string HelpId => ElementId + "_help";
+    private string ErrorId => ElementId + "_error";
+
+    // Derived once per (field, path) rather than per access: it is read several times each render.
+    private string _elementId = "";
+    private string ElementId => _elementId;
+
+    protected override void OnParametersSet()
+        => _elementId = new BlazorFormFieldContext(State, Field, Path).ElementId;
+
+    private string? DescribedBy
+    {
+        get
+        {
+            var hasHelp = !string.IsNullOrEmpty(Field.HelpText);
+            var hasErrors = ShowMessages && State.MessagesFor(Path).Count > 0;
+            return (hasHelp, hasErrors) switch
+            {
+                (true, true) => $"{HelpId} {ErrorId}",
+                (true, false) => HelpId,
+                (false, true) => ErrorId,
+                _ => null
+            };
+        }
+    }
+
+    /// <summary>
+    /// Prefers the item's own identity as the render key. Value-type and null elements fall back to the
+    /// index, which is all Blazor can distinguish them by.
+    /// </summary>
+    private object KeyFor(int index)
+    {
+        var item = State.GetValue(BlazorFormPath.Combine(Path, index));
+        return item is null || item.GetType().IsValueType || item is string ? index : item;
+    }
 
     private void Add() => State.AddArrayItem(Field, Path);
 }

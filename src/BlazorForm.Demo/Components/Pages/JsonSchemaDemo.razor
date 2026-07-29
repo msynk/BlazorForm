@@ -5,26 +5,36 @@
 
 <div class="demo-intro">
     <h1>JSON Schema</h1>
-    <p>Edit the JSON Schema on the left and the form regenerates on the right — no compiled model required. BlazorForm also exports any form back to JSON Schema.</p>
+    <p>
+        Edit the JSON Schema on the left and the form regenerates on the right — no compiled model
+        required. Alongside the standard keywords (<code>$ref</code>, <code>allOf</code>,
+        <code>if</code>/<code>then</code>, <code>dependentRequired</code>, <code>enum</code>,
+        <code>format</code>…), BlazorForm reads a small set of <code>x-</code> extensions for the UI
+        intent JSON Schema cannot express: widgets, layout, conditional visibility and wizard steps.
+        <strong>Export (round-trip)</strong> writes the whole thing back out, conditions and steps included.
+    </p>
 </div>
 
 <div class="demo-split">
     <div>
-        <textarea @bind="_json" @bind:event="oninput"></textarea>
-        <div style="margin-top:.75rem; display:flex; gap:.5rem">
+        <textarea @bind="_json" @bind:event="oninput" spellcheck="false" aria-label="JSON Schema"></textarea>
+        <div style="margin-top:.75rem; display:flex; gap:.5rem; flex-wrap:wrap">
             <button class="ff-btn ff-btn--primary" @onclick="Rebuild">Apply schema</button>
             <button class="ff-btn" @onclick="ExportRoundTrip">Export (round-trip)</button>
+            <button class="ff-btn" @onclick="LoadConditional">Load conditional example</button>
+            <button class="ff-btn" @onclick="LoadWizard">Load wizard example</button>
         </div>
         @if (_error is not null)
         {
-            <p style="color:#dc2626; font-size:.85rem">@_error</p>
+            <p style="color:#dc2626; font-size:.85rem" role="alert">@_error</p>
         }
     </div>
 
     <div class="demo-card">
         @if (_schema is not null)
         {
-            <BlazorFormView @key="_version" Definition="_schema" Data="_data" OnValidSubmit="HandleSubmit" SubmitText="Submit" />
+            <BlazorFormView @key="_version" Definition="_schema" Data="_data"
+                            OnValidSubmit="HandleSubmit" SubmitText="Submit" ShowErrorSummary="true" />
         }
     </div>
 </div>
@@ -51,21 +61,44 @@
 
 @if (_schema is not null)
 {
-    <BlazorFormView @key="_version" Definition="_schema" Data="_data" OnValidSubmit="HandleSubmit" SubmitText="Submit" />
+    <BlazorFormView @key="_version" Definition="_schema" Data="_data"
+                    OnValidSubmit="HandleSubmit" SubmitText="Submit" ShowErrorSummary="true" />
 }
 
 @code {
     private BlazorFormDefinition? _schema;
     private Dictionary<string, object?> _data = new();
     private int _version;
+    private string? _error;
 
-    private string _json = """
+    private void Rebuild()
+    {
+        // TryImport reports a malformed document instead of throwing — the shape you want behind
+        // a "paste your schema here" editor.
+        if (BlazorFormJsonSchemaImporter.TryImport(_json, out var schema, out _error))
+        {
+            _schema = schema;
+            _data = new Dictionary<string, object?>();
+            _version++;
+        }
+    }
+
+    private void ExportRoundTrip()
+    {
+        if (_schema is null) return;
+        // Conditions, wizard steps, layout and widget choices all survive the round-trip.
+        _json = BlazorFormJsonSchemaExporter.Export(_schema);
+    }
+}
+"""";
+
+    private const string BasicSchema = """
     {
       "title": "Event registration",
       "type": "object",
       "required": ["name", "email", "ticket"],
       "properties": {
-        "name":    { "type": "string", "title": "Full name", "minLength": 2 },
+        "name":    { "type": "string", "title": "Full name", "minLength": 2, "x-autocomplete": "name" },
         "email":   { "type": "string", "format": "email", "title": "Email" },
         "ticket":  { "type": "string", "title": "Ticket", "enum": ["standard", "vip"], "enumNames": ["Standard", "VIP"] },
         "guests":  { "type": "integer", "title": "Guests", "minimum": 0, "maximum": 5 },
@@ -75,30 +108,71 @@
     }
     """;
 
-    protected override void OnInitialized() => Rebuild();
-
-    private void Rebuild()
+    // Shows $defs/$ref, if/then, dependentRequired and the x-visibleWhen extension side by side.
+    private const string ConditionalSchema = """
     {
-        // Import a JSON Schema (draft-07) into a form definition.
-        _schema = BlazorFormJsonSchemaImporter.Import(_json);
-        _data = new Dictionary<string, object?>();
-        _version++;
+      "title": "Order",
+      "type": "object",
+      "x-columns": 2,
+      "required": ["kind", "email"],
+      "properties": {
+        "kind": {
+          "type": "string", "title": "Customer type",
+          "enum": ["personal", "business"], "enumNames": ["Personal", "Business"],
+          "x-widget": "radio", "x-colSpan": 2
+        },
+        "email": { "type": "string", "format": "email", "title": "Email", "x-colSpan": 2 },
+        "companyName": {
+          "type": "string", "title": "Company name", "x-colSpan": 2,
+          "x-visibleWhen":  { "field": "kind", "op": "Equals", "value": "business" },
+          "x-requiredWhen": { "field": "kind", "op": "Equals", "value": "business" },
+          "x-clearOnHide": true
+        },
+        "vatNumber": {
+          "type": "string", "title": "VAT number", "pattern": "^[A-Z]{2}[0-9]{8,12}$",
+          "x-visibleWhen": { "field": "kind", "op": "Equals", "value": "business" },
+          "x-clearOnHide": true
+        },
+        "billing": { "$ref": "#/$defs/address" },
+        "creditCard": { "type": "string", "title": "Card number" },
+        "billingReference": { "type": "string", "title": "Billing reference" }
+      },
+      "dependentRequired": { "creditCard": ["billingReference"] },
+      "$defs": {
+        "address": {
+          "type": "object", "title": "Billing address",
+          "required": ["city"],
+          "properties": {
+            "street": { "type": "string", "title": "Street" },
+            "city":   { "type": "string", "title": "City" }
+          }
+        }
+      }
     }
+    """;
 
-    private void ExportRoundTrip()
+    private const string WizardSchema = """
     {
-        if (_schema is null) return;
-        // Export any form definition back to JSON Schema.
-        _json = BlazorFormJsonSchemaExporter.Export(_schema);
+      "title": "Sign up",
+      "type": "object",
+      "required": ["email", "kind"],
+      "properties": {
+        "email":       { "type": "string", "format": "email", "title": "Email" },
+        "kind":        { "type": "string", "title": "Account type", "enum": ["personal", "business"], "x-widget": "radio" },
+        "companyName": { "type": "string", "title": "Company name" },
+        "accept":      { "type": "boolean", "title": "I accept the terms" }
+      },
+      "if":   { "properties": { "kind": { "const": "business" } } },
+      "then": { "required": ["companyName"] },
+      "x-steps": [
+        { "id": "contact", "title": "Contact", "fields": ["email"] },
+        { "id": "type",    "title": "Type",    "fields": ["kind"] },
+        { "id": "company", "title": "Company", "fields": ["companyName"],
+          "visibleWhen": { "field": "kind", "op": "Equals", "value": "business" } },
+        { "id": "confirm", "title": "Confirm", "fields": ["accept"] }
+      ]
     }
-
-    private void HandleSubmit(BlazorFormState state)
-    {
-        var resultJson = System.Text.Json.JsonSerializer.Serialize(_data,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-    }
-}
-"""";
+    """;
 
     private BlazorFormDefinition? _schema;
     private Dictionary<string, object?> _data = new();
@@ -106,38 +180,23 @@
     private string? _error;
     private bool _submitted;
     private string _resultJson = "";
-
-    private string _json = """
-    {
-      "title": "Event registration",
-      "type": "object",
-      "required": ["name", "email", "ticket"],
-      "properties": {
-        "name":    { "type": "string", "title": "Full name", "minLength": 2 },
-        "email":   { "type": "string", "format": "email", "title": "Email" },
-        "ticket":  { "type": "string", "title": "Ticket", "enum": ["standard", "vip"], "enumNames": ["Standard", "VIP"] },
-        "guests":  { "type": "integer", "title": "Guests", "minimum": 0, "maximum": 5 },
-        "notes":   { "type": "string", "title": "Dietary notes", "x-widget": "textarea" },
-        "subscribe": { "type": "boolean", "title": "Email me about future events" }
-      }
-    }
-    """;
+    private string _json = BasicSchema;
 
     protected override void OnInitialized() => Rebuild();
 
     private void Rebuild()
     {
-        try
+        if (BlazorFormJsonSchemaImporter.TryImport(_json, out var schema, out var error))
         {
-            _schema = BlazorFormJsonSchemaImporter.Import(_json);
+            _schema = schema;
             _data = new Dictionary<string, object?>();
             _version++;
             _error = null;
             _submitted = false;
         }
-        catch (Exception ex)
+        else
         {
-            _error = "Invalid JSON Schema: " + ex.Message;
+            _error = "Invalid JSON Schema: " + error;
         }
     }
 
@@ -145,6 +204,18 @@
     {
         if (_schema is null) return;
         _json = BlazorFormJsonSchemaExporter.Export(_schema);
+    }
+
+    private void LoadConditional()
+    {
+        _json = ConditionalSchema;
+        Rebuild();
+    }
+
+    private void LoadWizard()
+    {
+        _json = WizardSchema;
+        Rebuild();
     }
 
     private void HandleSubmit(BlazorFormState state)

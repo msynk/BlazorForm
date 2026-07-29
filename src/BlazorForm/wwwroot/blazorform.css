@@ -1,10 +1,16 @@
-/* BlazorForm default theme — dependency-free, themeable via CSS custom properties. */
+/* BlazorForm default theme — dependency-free, themeable via CSS custom properties.
+   Every colour is a variable, so a host app can restyle the whole form by overriding
+   `--ff-*` on `.ff-form` (or any ancestor) without touching this file. */
 .ff-form {
     --ff-accent: #4f46e5;
     --ff-accent-contrast: #ffffff;
+    --ff-surface: #ffffff;
+    --ff-surface-muted: #fafafa;
+    --ff-surface-disabled: #f3f4f6;
     --ff-border: #d1d5db;
     --ff-border-focus: var(--ff-accent);
     --ff-error: #dc2626;
+    --ff-error-surface: #fef2f2;
     --ff-warning: #d97706;
     --ff-text: #111827;
     --ff-muted: #6b7280;
@@ -16,17 +22,77 @@
     max-width: 720px;
 }
 
+/* Follows the OS setting unless the host app has already themed the form. An app with its own theme
+   toggle drives the same tokens by putting data-theme on any ancestor, which wins over the media
+   query because it is a more specific selector — so "dark site, light OS" comes out dark. */
+@media (prefers-color-scheme: dark) {
+    .ff-form {
+        --ff-surface: #111827;
+        --ff-surface-muted: #1f2937;
+        --ff-surface-disabled: #374151;
+        --ff-border: #4b5563;
+        --ff-error: #f87171;
+        --ff-error-surface: #2a1215;
+        --ff-warning: #fbbf24;
+        --ff-text: #f9fafb;
+        --ff-muted: #9ca3af;
+    }
+}
+
+[data-theme="dark"] .ff-form, .ff-form[data-theme="dark"] {
+    --ff-surface: #111827;
+    --ff-surface-muted: #1f2937;
+    --ff-surface-disabled: #374151;
+    --ff-border: #4b5563;
+    --ff-error: #f87171;
+    --ff-error-surface: #2a1215;
+    --ff-warning: #fbbf24;
+    --ff-text: #f9fafb;
+    --ff-muted: #9ca3af;
+}
+
+[data-theme="light"] .ff-form, .ff-form[data-theme="light"] {
+    --ff-surface: #ffffff;
+    --ff-surface-muted: #fafafa;
+    --ff-surface-disabled: #f3f4f6;
+    --ff-border: #d1d5db;
+    --ff-error: #dc2626;
+    --ff-error-surface: #fef2f2;
+    --ff-warning: #d97706;
+    --ff-text: #111827;
+    --ff-muted: #6b7280;
+}
+
 .ff-form__title { font-size: 1.5rem; font-weight: 650; margin: 0 0 .25rem; }
 .ff-form__description { color: var(--ff-muted); margin: 0 0 1.25rem; }
 
 .ff-form__body { display: flex; flex-direction: column; gap: var(--ff-gap); }
 
-.ff-field { display: flex; flex-direction: column; gap: .35rem; }
+/* Multi-column layout. `grid-template-columns` is supplied inline from the schema's column count. */
+.ff-form__body.ff-grid,
+.ff-step-body.ff-grid,
+.ff-group__body.ff-grid {
+    display: grid;
+    gap: var(--ff-gap);
+    align-items: start;
+}
+@media (max-width: 640px) {
+    .ff-grid { grid-template-columns: 1fr !important; }
+    .ff-grid > * { grid-column: span 1 !important; }
+}
+
+.ff-field { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
 .ff-field--checkbox { gap: .25rem; }
 
 .ff-label { font-weight: 550; font-size: .9rem; }
-.ff-required { color: var(--ff-error); margin-left: .15rem; }
+.ff-required { color: var(--ff-error); margin-inline-start: .15rem; }
 .ff-help { color: var(--ff-muted); font-size: .8rem; margin: .1rem 0 0; }
+
+/* Visible only to assistive technology — used for the repeater's live region. */
+.ff-sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 .ff-input {
     width: 100%;
@@ -35,26 +101,100 @@
     border: 1px solid var(--ff-border);
     border-radius: var(--ff-radius);
     font-size: .95rem;
-    background: #fff;
+    font-family: inherit;
+    color: inherit;
+    background: var(--ff-surface);
     transition: border-color .15s, box-shadow .15s;
 }
-.ff-input:focus {
+.ff-input:focus-visible {
     outline: none;
     border-color: var(--ff-border-focus);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ff-accent) 20%, transparent);
 }
-.ff-input:disabled { background: #f3f4f6; color: var(--ff-muted); cursor: not-allowed; }
+.ff-input:disabled { background: var(--ff-surface-disabled); color: var(--ff-muted); cursor: not-allowed; }
+.ff-input:read-only:not(:disabled) { background: var(--ff-surface-muted); }
 .ff-input--invalid { border-color: var(--ff-error); }
 .ff-field--invalid .ff-label { color: var(--ff-error); }
 
 textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 
+/* Affixes: a "$" or "kg" that lives inside the field's border rather than beside it. The wrapper
+   carries the border so the whole thing reads as one control, and the input inside gives its up. */
+.ff-affixed {
+    display: flex; align-items: stretch; width: 100%;
+    border: 1px solid var(--ff-border); border-radius: var(--ff-radius);
+    background: var(--ff-surface); overflow: hidden;
+}
+.ff-affixed:focus-within {
+    border-color: var(--ff-border-focus);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ff-accent) 20%, transparent);
+}
+.ff-affixed--invalid { border-color: var(--ff-error); }
+.ff-affixed .ff-input { border: none; border-radius: 0; background: transparent; box-shadow: none; flex: 1; min-width: 0; }
+.ff-affixed .ff-input:focus-visible { box-shadow: none; }
+.ff-affix {
+    display: flex; align-items: center; padding: 0 .7rem;
+    background: var(--ff-surface-muted); color: var(--ff-muted);
+    font-size: .9rem; white-space: nowrap; user-select: none;
+}
+.ff-affix--prefix { border-inline-end: 1px solid var(--ff-border); }
+.ff-affix--suffix { border-inline-start: 1px solid var(--ff-border); }
+
+/* Affix buttons: the password reveal and the clear-field control. Transparent rather than filled, so
+   they read as part of the input instead of as a second thing beside it. */
+.ff-affix--btn {
+    border: none; background: transparent; cursor: pointer;
+    font: inherit; font-size: .95rem; line-height: 1; padding-inline: .6rem;
+}
+.ff-affix--btn:hover { background: var(--ff-surface-muted); color: var(--ff-text); }
+.ff-affix--btn:focus-visible { outline: 2px solid var(--ff-accent); outline-offset: -2px; }
+
+/* Character counter */
+.ff-counter { margin: .1rem 0 0; font-size: .75rem; color: var(--ff-muted); text-align: end; font-variant-numeric: tabular-nums; }
+.ff-counter--over { color: var(--ff-error); }
+
+/* A checkbox asked to look like a switch. Same control, same semantics, different affordance. */
+.ff-switch {
+    appearance: none; -webkit-appearance: none;
+    inline-size: 2.25rem; block-size: 1.25rem; flex: none;
+    border: 1px solid var(--ff-border); border-radius: 999px;
+    background: var(--ff-surface-muted); position: relative; cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.ff-switch::after {
+    content: ""; position: absolute; inset-block-start: 50%; inset-inline-start: .15rem;
+    inline-size: .9rem; block-size: .9rem; border-radius: 50%;
+    background: var(--ff-border); transform: translateY(-50%);
+    transition: inset-inline-start .15s, background .15s;
+}
+.ff-switch:checked { background: var(--ff-accent); border-color: var(--ff-accent); }
+.ff-switch:checked::after { inset-inline-start: calc(100% - 1.05rem); background: var(--ff-accent-contrast); }
+.ff-switch:focus-visible { outline: 2px solid var(--ff-accent); outline-offset: 2px; }
+.ff-switch:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Presentational content: headings and explanatory text between the inputs. */
+.ff-field--static { gap: .25rem; }
+.ff-static__heading { font-size: 1.05rem; font-weight: 650; margin: .5rem 0 0; }
+.ff-static__text { color: var(--ff-muted); font-size: .875rem; margin: 0; }
+.ff-static__divider { border: none; border-block-start: 1px solid var(--ff-border); margin: .75rem 0 0; }
+
 .ff-checkbox, .ff-radio { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; font-size: .95rem; }
+.ff-checkbox:has(input:disabled), .ff-radio:has(input:disabled) { cursor: not-allowed; color: var(--ff-muted); }
 .ff-radio-group, .ff-multiselect { display: flex; flex-direction: column; gap: .4rem; }
 
 .ff-range { display: flex; align-items: center; gap: .75rem; }
-.ff-range__slider { flex: 1; }
-.ff-range__value { min-width: 2.5rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--ff-muted); }
+.ff-range__slider { flex: 1; accent-color: var(--ff-accent); }
+.ff-range__value { min-inline-size: 2.5rem; text-align: end; font-variant-numeric: tabular-nums; color: var(--ff-muted); }
+
+/* File upload */
+.ff-file { display: flex; flex-direction: column; gap: .5rem; align-items: flex-start; }
+.ff-file__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; width: 100%; }
+.ff-file__item {
+    display: flex; justify-content: space-between; gap: .75rem; font-size: .85rem;
+    background: var(--ff-surface-muted); border: 1px solid var(--ff-border);
+    border-radius: var(--ff-radius); padding: .35rem .6rem;
+}
+.ff-file__size { color: var(--ff-muted); font-variant-numeric: tabular-nums; }
 
 .ff-messages { list-style: none; margin: .15rem 0 0; padding: 0; }
 .ff-message { font-size: .8rem; }
@@ -62,47 +202,96 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 .ff-message--warning { color: var(--ff-warning); }
 .ff-message--info { color: var(--ff-muted); }
 
+/* Error summary */
+.ff-summary {
+    border: 1px solid var(--ff-error);
+    background: var(--ff-error-surface);
+    border-radius: var(--ff-radius);
+    padding: .9rem 1.1rem;
+    margin: 0 0 1.25rem;
+}
+.ff-summary:focus-visible { outline: 2px solid var(--ff-error); outline-offset: 2px; }
+.ff-summary__title { font-weight: 600; color: var(--ff-error); margin: 0 0 .4rem; font-size: .9rem; }
+.ff-summary__list { margin: 0; padding-inline-start: 1.15rem; font-size: .85rem; display: flex; flex-direction: column; gap: .2rem; }
+.ff-summary__list a { color: var(--ff-error); }
+
 /* Groups (nested objects) */
-.ff-group { border: 1px solid var(--ff-border); border-radius: var(--ff-radius); padding: 1rem; margin: 0; }
+.ff-group { border: 1px solid var(--ff-border); border-radius: var(--ff-radius); padding: 1rem; margin: 0; min-width: 0; }
 .ff-group__legend { font-weight: 600; padding: 0 .4rem; }
 .ff-group__body { display: flex; flex-direction: column; gap: var(--ff-gap); }
+.ff-group[disabled] { opacity: .6; }
 
 /* Arrays / repeaters */
-.ff-array { display: flex; flex-direction: column; gap: .6rem; }
-.ff-array__header { display: flex; align-items: center; }
+.ff-array { display: flex; flex-direction: column; gap: .6rem; border: none; padding: 0; margin: 0; min-width: 0; }
+.ff-array__header { display: flex; align-items: center; gap: .4rem; padding: 0; font-weight: 600; }
 .ff-array__title { font-weight: 600; }
+.ff-array__count {
+    font-size: .7rem; font-weight: 600; color: var(--ff-muted);
+    background: var(--ff-surface-muted); border: 1px solid var(--ff-border);
+    border-radius: 999px; padding: 0 .45rem; line-height: 1.4;
+}
 .ff-array__empty { color: var(--ff-muted); font-size: .85rem; font-style: italic; margin: 0; }
 .ff-array__item {
     display: flex; gap: .75rem; align-items: flex-start;
-    border: 1px solid var(--ff-border); border-radius: var(--ff-radius); padding: .85rem; background: #fafafa;
+    border: 1px solid var(--ff-border); border-radius: var(--ff-radius); padding: .85rem;
+    background: var(--ff-surface-muted);
 }
-.ff-array__item-body { flex: 1; display: flex; flex-direction: column; gap: .6rem; }
+.ff-array__item-body { flex: 1; display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+.ff-array__item-index { font-size: .75rem; font-weight: 600; color: var(--ff-muted); }
 .ff-array__item-actions { display: flex; flex-direction: column; gap: .3rem; }
+.ff-array[disabled] { opacity: .6; }
 
 /* Buttons */
 .ff-btn {
     padding: .5rem .9rem; border: 1px solid var(--ff-border); border-radius: var(--ff-radius);
-    background: #fff; color: var(--ff-text); font-size: .9rem; cursor: pointer; transition: background .15s, border-color .15s;
+    background: var(--ff-surface); color: var(--ff-text); font-size: .9rem; font-family: inherit;
+    cursor: pointer; transition: background .15s, border-color .15s;
 }
-.ff-btn:hover:not(:disabled) { background: #f3f4f6; }
+.ff-btn:hover:not(:disabled) { background: var(--ff-surface-muted); }
+.ff-btn:focus-visible { outline: 2px solid var(--ff-accent); outline-offset: 2px; }
 .ff-btn:disabled { opacity: .5; cursor: not-allowed; }
 .ff-btn--primary { background: var(--ff-accent); color: var(--ff-accent-contrast); border-color: var(--ff-accent); }
 .ff-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ff-accent) 85%, #000); }
 .ff-btn--danger { color: var(--ff-error); border-color: color-mix(in srgb, var(--ff-error) 40%, var(--ff-border)); }
+.ff-btn--ghost { border-color: transparent; color: var(--ff-muted); }
 .ff-btn--icon { padding: .3rem .55rem; line-height: 1; }
+.ff-btn--sm { padding: .3rem .6rem; font-size: .8rem; }
 .ff-btn--add { align-self: flex-start; border-style: dashed; }
 
-.ff-form__actions { display: flex; gap: .6rem; margin-top: 1.25rem; }
+.ff-form__actions { display: flex; gap: .6rem; margin-top: 1.25rem; flex-wrap: wrap; }
 
 /* Stepper / wizard */
-.ff-stepper { display: flex; list-style: none; padding: 0; margin: 0 0 1.5rem; gap: .5rem; }
+.ff-stepper-nav { display: block; }
+.ff-stepper { display: flex; list-style: none; padding: 0; margin: 0 0 1.5rem; gap: .5rem; flex-wrap: wrap; }
 .ff-stepper__step { display: flex; align-items: center; gap: .5rem; flex: 1; color: var(--ff-muted); font-size: .85rem; }
 .ff-stepper__num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 1.8rem; height: 1.8rem; border-radius: 50%;
-    border: 2px solid var(--ff-border); background: #fff; font-weight: 600; flex: none;
+    border: 2px solid var(--ff-border); background: var(--ff-surface); font-weight: 600; flex: none;
 }
+.ff-stepper__link {
+    display: flex; align-items: center; gap: .5rem;
+    background: none; border: none; padding: 0; margin: 0;
+    font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.ff-stepper__link:hover .ff-stepper__label { text-decoration: underline; }
+.ff-stepper__link:focus-visible { outline: 2px solid var(--ff-accent); outline-offset: 2px; border-radius: var(--ff-radius); }
 .ff-stepper__step.is-active { color: var(--ff-text); font-weight: 600; }
 .ff-stepper__step.is-active .ff-stepper__num { border-color: var(--ff-accent); color: var(--ff-accent); }
 .ff-stepper__step.is-done .ff-stepper__num { background: var(--ff-accent); color: var(--ff-accent-contrast); border-color: var(--ff-accent); }
 .ff-step-body { display: flex; flex-direction: column; gap: var(--ff-gap); }
+
+/* These containers are focusable only so a step change or an error jump has somewhere to land. The
+   outline is deliberate — it tells the user where they now are — but the default browser one is drawn
+   tight against the content, so it gets some room. */
+.ff-step-body:focus-visible,
+.ff-radio-group:focus-visible,
+.ff-multiselect:focus-visible {
+    outline: 2px solid var(--ff-accent);
+    outline-offset: 4px;
+    border-radius: var(--ff-radius);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ff-input, .ff-btn { transition: none; }
+}

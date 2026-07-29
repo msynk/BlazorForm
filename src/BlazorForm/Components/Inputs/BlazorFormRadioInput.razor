@@ -1,17 +1,46 @@
 @namespace BlazorForm
 @inherits BlazorFormInputBase
 
-<div class="ff-radio-group" role="radiogroup">
-    @foreach (var opt in Field.Options)
+@* The group is named by the field's own label element when there is one; when the schema suppressed
+   the visible label, pointing aria-labelledby at an element that was never rendered would leave the
+   group anonymous, so the name is inlined instead. *@
+@* tabindex="-1" so "take me to this field" has somewhere to land. A radio group has no single control
+   to focus, and landing on the group itself makes the screen reader announce the group's name and role
+   before the user arrows through the options — which is how a radio group is meant to be navigated. *@
+<div class="ff-radio-group"
+     @ref="Element"
+     tabindex="-1"
+     role="radiogroup"
+     aria-labelledby="@(Field.ShowLabel ? Context.LabelId : null)"
+     aria-label="@AriaLabel"
+     aria-required="@AriaRequired"
+     aria-invalid="@AriaInvalid"
+     aria-describedby="@DescribedBy">
+    @foreach (var opt in Context.Options)
     {
-        <label class="ff-radio">
+        var optionId = $"{Context.ElementId}_{Sanitize(opt.Value)}";
+        <label class="ff-radio" for="@optionId">
             <input type="radio"
+                   id="@optionId"
                    name="@Context.ElementId"
                    value="@opt.Value"
                    checked="@(opt.Value == Context.StringValue)"
-                   disabled="@(Disabled || opt.Disabled)"
-                   @onchange="@(() => Context.SetFromStringAsync(opt.Value))" />
+                   disabled="@(DisabledOrReadOnly || opt.Disabled)"
+                   @onchange="@(() => Context.SetFromStringAsync(opt.Value))"
+                   @onblur="OnBlur" />
             <span>@opt.Label</span>
         </label>
     }
 </div>
+
+@code {
+    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+
+    // Option values become part of a DOM id, so anything that is not id-safe is folded to '_'.
+    private static string Sanitize(string value)
+        => string.Create(value.Length, value, static (span, v) =>
+        {
+            for (var i = 0; i < v.Length; i++)
+                span[i] = char.IsLetterOrDigit(v[i]) ? v[i] : '_';
+        });
+}

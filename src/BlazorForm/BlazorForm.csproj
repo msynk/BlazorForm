@@ -6,18 +6,36 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!--
+      CS1591  XML comments are on the public surface but not required on every member.
+      CA1720  "Object"/"Integer" are the schema's own vocabulary (and match JSON Schema), not CLR type names.
+      CA1725  Rules take a `ctx` parameter for readability at every call site.
+      CA1000  BlazorFormBuilder<T>.Path is deliberately static: it is used where no builder instance exists.
+      CA1716  IBlazorFormMessageProvider.Get reads best as `Get`; the interface is C#-facing.
+      CA1859  Several helpers return object? precisely because they can return null.
+    -->
+    <NoWarn>$(NoWarn);CS1591;CA1720;CA1725;CA1000;CA1716;CA1859</NoWarn>
 
     <PackageId>BlazorForm</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Authors>msynk</Authors>
     <Description>Schema-driven form engine for Blazor: render forms from C# types or JSON Schema with validation, conditional visibility, multi-step wizards and array/repeater fields. Dependency-light HTML renderers with a pluggable renderer registry.</Description>
-    <PackageTags>blazor;forms;schema;validation;json-schema;form-builder;wizard</PackageTags>
+    <PackageTags>blazor;forms;schema;validation;json-schema;form-builder;wizard;dynamic-forms</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/msynk/BlazorForm</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/msynk/BlazorForm</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
     <SupportedPlatform Include="browser" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
   <ItemGroup>

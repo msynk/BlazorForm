@@ -1,27 +1,152 @@
 @namespace BlazorForm
 @inherits BlazorFormInputBase
 
-<input id="@Context.ElementId"
-       class="@CssClass"
-       type="@HtmlType"
-       value="@Context.StringValue"
-       placeholder="@Field.Placeholder"
-       disabled="@Disabled"
-       readonly="@Field.ReadOnly"
-       maxlength="@Field.MaxLength"
-       pattern="@Field.Pattern"
-       @onchange="OnChange"
-       @onblur="OnBlur" />
+@* An affixed control wraps the input so a "$", a "kg" or a reveal button sits inside the same bordered
+   box. Without any adornment the input is emitted bare, so the common case adds nothing to the DOM. *@
+@if (HasAffix)
+{
+    <div class="ff-affixed @(Context.HasError && Context.ShowMessages ? "ff-affixed--invalid" : "")">
+        @if (!string.IsNullOrEmpty(Field.Prefix))
+        {
+            <span class="ff-affix ff-affix--prefix" aria-hidden="true">@Field.Prefix</span>
+        }
+        @Control
+        @if (!string.IsNullOrEmpty(Field.Suffix))
+        {
+            <span class="ff-affix ff-affix--suffix" aria-hidden="true">@Field.Suffix</span>
+        }
+        @if (ShowClear)
+        {
+            @* Discoverable on a touch screen, where "select all and delete" is real work, and skipped
+               by the tab order because the same thing is achievable from the field itself. *@
+            <button type="button" class="ff-affix ff-affix--btn" tabindex="-1"
+                    title="@ClearLabel" aria-label="@ClearLabel" @onclick="Clear">×</button>
+        }
+        @if (ShowReveal)
+        {
+            @* aria-pressed, not a label that changes meaning: a screen reader announces the toggle's
+               state rather than the user having to infer it from the button's name. *@
+            <button type="button" class="ff-affix ff-affix--btn" aria-pressed="@(_revealed ? "true" : "false")"
+                    title="@RevealLabel" aria-label="@RevealLabel" @onclick="ToggleReveal">@(_revealed ? "🙈" : "👁")</button>
+        }
+    </div>
+}
+else
+{
+    @Control
+}
+
+@if (SuggestionsId is not null)
+{
+    @* A datalist suggests without constraining: the field still accepts anything the user types, which
+       is what separates "here are the usual answers" from a closed set of options. *@
+    <datalist id="@SuggestionsId">
+        @foreach (var suggestion in Field.Suggestions)
+        {
+            <option value="@suggestion" />
+        }
+    </datalist>
+}
+
+@if (ShowCounter)
+{
+    @* aria-hidden, not a live region: announcing a new count on every keystroke would drown out
+       everything else, and the limit is already enforced by the control itself. *@
+    <p class="ff-counter @(Length > Field.MaxLength ? "ff-counter--over" : "")" aria-hidden="true">
+        @Context.Text(BlazorFormMessageKeys.CharacterCount, Length, Field.MaxLength)
+    </p>
+}
 
 @code {
+    // The splat comes first on purpose: Blazor applies duplicate attributes in source order and the
+    // last one wins, so everything below overrides what the schema supplied. That is what stops a
+    // stray aria-describedby in the schema from unhooking the field's own error message.
+    private RenderFragment Control => @<input @attributes="ExtraAttributes"
+                                              id="@Context.ElementId"
+                                              @ref="Element"
+                                              class="@CssClass"
+                                              type="@HtmlType"
+                                              value="@DisplayValue"
+                                              placeholder="@Field.Placeholder"
+                                              disabled="@Disabled"
+                                              readonly="@ReadOnly"
+                                              maxlength="@Field.MaxLength"
+                                              list="@SuggestionsId"
+                                              autocomplete="@Field.Autocomplete"
+                                              inputmode="@Field.InputMode"
+                                              aria-required="@AriaRequired"
+                                              aria-invalid="@AriaInvalid"
+                                              aria-label="@AriaLabel"
+                                              aria-describedby="@DescribedBy"
+                                              @onchange="OnChange"
+                                              @oninput="InputHandler"
+                                              @onblur="OnBlur" />
+    ;
+
     private string HtmlType => Field.Type switch
     {
+        // A revealed password is a plain text box for as long as it is revealed; there is no other way
+        // to show the characters, and `autocomplete` on the field still tells the browser what it is.
+        BlazorFormFieldType.Password => _revealed ? "text" : "password",
         BlazorFormFieldType.Email => "email",
-        BlazorFormFieldType.Password => "password",
         BlazorFormFieldType.Url => "url",
         BlazorFormFieldType.Tel => "tel",
         BlazorFormFieldType.Color => "color",
         BlazorFormFieldType.Hidden => "hidden",
         _ => "text"
     };
+
+    /// <summary>
+    /// What the control displays. Identical to the stored value except for an empty colour picker: the
+    /// browser has no "no colour" state and renders black regardless, so the swatch is made to agree
+    /// with the placeholder rather than showing a colour the model does not hold.
+    /// </summary>
+    private string DisplayValue => Field.Type == BlazorFormFieldType.Color && Context.StringValue.Length == 0
+        ? EmptyColour
+        : Context.StringValue;
+
+    /// <summary>The colour an empty picker shows — <c>Attr("emptyColor", "#rrggbb")</c>, else black.</summary>
+    private string EmptyColour => Attr("emptyColor", "#000000")!;
+
+    private bool HasAffix
+        => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix) || ShowReveal || ShowClear;
+
+    private bool _revealed;
+
+    /// <summary>
+    /// Whether a password field offers a "show the characters" toggle — <c>Attr("reveal", true)</c>, or
+    /// the builder's <c>Revealable()</c>. Opt-in, because whether a password may be shown at all is a
+    /// decision about the surrounding environment, not about the field.
+    /// </summary>
+    private bool ShowReveal
+        => Field.Type == BlazorFormFieldType.Password && Attr("reveal", false) && !DisabledOrReadOnly;
+
+    /// <summary>
+    /// Whether the field offers a one-click "empty this" button — <c>Attr("clearable", true)</c>, or
+    /// the builder's <c>Clearable()</c>. Hidden while there is nothing to clear.
+    /// </summary>
+    private bool ShowClear
+        => Attr("clearable", false)
+           && Field.Type is not (BlazorFormFieldType.Hidden or BlazorFormFieldType.Color)
+           && !DisabledOrReadOnly
+           && Context.StringValue.Length > 0;
+
+    private string RevealLabel => Context.Text(_revealed
+        ? BlazorFormMessageKeys.PasswordHide
+        : BlazorFormMessageKeys.PasswordShow);
+
+    private string ClearLabel => Context.Text(BlazorFormMessageKeys.Clear);
+
+    private void ToggleReveal() => _revealed = !_revealed;
+
+    private Task Clear() => Context.SetValueAsync(null);
+
+    private bool ShowCounter => Field.ShowCharacterCount && Field.MaxLength is > 0 && Field.Type != BlazorFormFieldType.Hidden;
+
+    private int Length => DisplayLength;
+
+    /// <summary>Id of the suggestion list, or null when the field offers none.</summary>
+    private string? SuggestionsId => Field.Suggestions.Count > 0 && Field.Type != BlazorFormFieldType.Hidden
+        ? Context.ElementId + "_list"
+        : null;
 }

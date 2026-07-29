@@ -1,7 +1,11 @@
 @namespace BlazorForm
+
 @if (Show && Messages.Count > 0)
 {
-    <ul class="ff-messages">
+    @* No live region here on purpose. The input points `aria-describedby` at this list, so a screen
+       reader reads the message when focus reaches the field; a second announcement from a live region
+       would just repeat it. The error summary is the one place that announces. *@
+    <ul class="ff-messages" id="@Id">
         @foreach (var msg in Messages)
         {
             <li class="ff-message ff-message--@msg.Severity.ToString().ToLowerInvariant()">@msg.Message</li>
@@ -11,5 +15,9 @@
 
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<BlazorFormValidationMessage> Messages { get; set; } = Array.Empty<BlazorFormValidationMessage>();
+
     [Parameter] public bool Show { get; set; } = true;
+
+    /// <summary>DOM id, so an input's <c>aria-describedby</c> can point at this list.</summary>
+    [Parameter] public string? Id { get; set; }
 }

@@ -18,6 +18,9 @@ builder.Services.AddBlazorForm(registry =>
 // FluentValidation validators used by the FluentValidation demo.
 builder.Services.AddScoped<IValidator<JobApplication>, JobApplicationValidator>();
 
+// Stand-in repository behind the async validation and cascading-options demos.
+builder.Services.AddSingleton<DemoDirectory>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

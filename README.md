@@ -6,11 +6,19 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 
 - **Schema-first** – describe a form once as a `BlazorFormDefinition` and render it anywhere.
 - **Multiple sources** – generate a schema from a POCO via reflection + DataAnnotations, build one with a fluent API, or import a JSON Schema document.
-- **Strongly-typed builder** – select fields with lambda expressions so names and value types are inferred and refactor-safe.
-- **Rich field types** – text, number, select, multi-select, radio, checkbox, date/time, range, color, file, nested objects, and repeating arrays.
-- **Validation** – built-in rules (required, length, range, pattern, email, collection size), custom sync/async rules, and optional [FluentValidation](https://docs.fluentvalidation.net/) integration.
-- **Conditional behaviour** – show/hide or disable fields and wizard steps based on other field values.
-- **Wizards** – split a form into ordered steps with per-step validation.
+- **Strongly-typed builder** – select fields with lambda expressions (including nested ones, `x => x.Address.City`) so names and value types are inferred and refactor-safe.
+- **Rich field types** – text, number, select, multi-select, radio, checkbox/switch, date/time, range, color, file upload, static section headings, nested objects, and repeating arrays.
+- **Field polish** – prefix/suffix affixes, live character counters, `<datalist>` suggestions, a password reveal toggle, a clear button, and arbitrary HTML attributes splatted onto any control.
+- **Live updates** – write on every keystroke instead of on blur, with optional debouncing, for as-you-type previews and validation.
+- **Validation** – built-in rules (required, length, range, pattern, email, URL, compare, multiple-of, unique items, collection size, file size/type), custom sync/async rules, form-level cross-field rules, and optional [FluentValidation](https://docs.fluentvalidation.net/) integration.
+- **Validation modes** – choose when fields revalidate before and after the first submit (`OnSubmit` / `OnBlur` / `OnChange`).
+- **Conditional behaviour** – show/hide, disable, or conditionally require fields and wizard steps based on other values, and clear hidden values so abandoned branches never reach your model.
+- **Async & cascading options** – load select options from a service and reload them when a dependency changes.
+- **Computed values** – derive a field from the rest of the form (totals, full names), including per-row formulas inside a repeater.
+- **Wizards** – split a form into ordered steps with per-step validation, conditional steps and a clickable stepper.
+- **Accessible by default** – labels, `aria-required` / `aria-invalid` / `aria-describedby`, live-announced errors, grouped radio and multi-select controls, real focus management (autofocus, and focus-the-first-error after a failed submit), and an optional error summary that links to each field.
+- **Localisable** – swap *all* the built-in English text — validation messages, buttons, placeholders, repeater labels — for your own via `IBlazorFormMessageProvider`.
+- **Schema diagnostics** – `Definition.Validate()` catches duplicate field names, arrays with no item template, steps naming fields that do not exist, and conditions pointing nowhere.
 - **Pluggable renderers** – override the default HTML inputs through a renderer registry.
 
 ## Requirements
@@ -32,6 +40,14 @@ Or reference the project directly:
 ```
 
 All public types live in the single `BlazorForm` namespace and are prefixed with `BlazorForm`, so a single `@using BlazorForm` (or `using BlazorForm;`) brings everything into scope.
+
+Add the stylesheet to your host page:
+
+```html
+<link rel="stylesheet" href="_content/BlazorForm/blazorform.css" />
+```
+
+Every colour is a CSS custom property on `.ff-form`, and the default theme follows the OS light/dark preference.
 
 ## Quick start
 
@@ -87,6 +103,23 @@ var definition = BlazorFormBuilder.For<Contact>()
     .Build();
 ```
 
+Constraints replace, rather than stack on top of, the rules generated from DataAnnotations, so
+restating `[Required]` in the builder to give it a better message produces **one** error, not two.
+
+Nested members, object groups and arrays are all expression-based:
+
+```csharp
+BlazorFormBuilder.For<Order>()
+    .Field(x => x.Customer.Email, f => f.Required())          // binds to "Customer.Email"
+    .Object(x => x.ShippingAddress, a => a
+        .Field(p => p.Street)
+        .Field(p => p.City))
+    .Array(x => x.Lines, i => i
+        .Field(l => l.Product, f => f.Required())
+        .Field(l => l.Quantity, f => f.Range(1, 999)))
+    .Build();
+```
+
 The untyped builder is handy when you have no compiled model:
 
 ```csharp
@@ -95,6 +128,7 @@ var definition = BlazorFormBuilder.Create()
     .Text("subject", f => f.Required())
     .Field("body", BlazorFormFieldType.TextArea, f => f.AsTextArea(rows: 6))
     .Select("topic", f => f.Options(("bug", "Bug"), ("idea", "Idea")))
+    .ArrayOf("tags", BlazorFormFieldType.Text, f => f.Items(max: 5).UniqueItems())
     .Build();
 ```
 
@@ -106,11 +140,50 @@ using BlazorForm;
 var definition = BlazorFormJsonSchemaImporter.Import(jsonSchemaString);
 ```
 
-The importer supports common draft-07 keywords (`type`, `properties`, `required`, `enum`,
-`format`, `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`, `items`) plus a few `x-`
-extensions for UI intent: `x-widget`, `x-order`, `x-placeholder`, and `enumNames`.
+The importer covers draft-07 through 2020-12: `type` (including nullable unions such as
+`["string","null"]`), `properties`, `required`, `enum`, `const`, `format`, `default`, `examples`,
+`readOnly`, `minimum`/`maximum` and their exclusive forms, `multipleOf`, `minLength`/`maxLength`,
+`pattern`, `items`, `minItems`/`maxItems`, `uniqueItems`, `$ref` into `$defs`/`definitions`, `allOf`
+(merged), `if`/`then`/`else` and `dependentRequired`/`dependencies` — the last two mapped onto
+conditional requiredness.
 
-Export any form back to JSON Schema with `BlazorFormJsonSchemaExporter.Export(definition)`.
+`anyOf`/`oneOf` is handled for the two shapes that describe a single control: a null union
+(`{"anyOf":[{"type":"string"},{"type":"null"}]}`) collapses to the branch it wraps, and a list of
+`const` branches with titles becomes a labelled select. A union of genuinely different *object* shapes
+describes a choice of subforms rather than a choice of values — it needs a selector and a form that
+swaps with it — so it is left alone rather than bound to a branch the document never committed to.
+
+Use `TryImport` when the schema comes from a user:
+
+```csharp
+if (BlazorFormJsonSchemaImporter.TryImport(json, out var definition, out var error))
+    // render it
+else
+    ShowError(error);
+```
+
+UI intent that JSON Schema has no vocabulary for travels in `x-` extensions, and all of it
+round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
+
+| Extension | Meaning |
+| --- | --- |
+| `x-widget` | Force a control: `textarea`, `radio`, `multiselect`, `range`, `switch`, `file`, `static`, `hidden`, … |
+| `x-renderer` | A custom renderer key registered with `RegisterCustom`. |
+| `x-order`, `x-placeholder`, `x-autocomplete`, `x-inputMode`, `x-autofocus` | Field metadata. |
+| `x-columns`, `x-colSpan` | Grid layout. |
+| `x-prefix`, `x-suffix`, `x-showLabel`, `x-characterCount` | Presentation. |
+| `x-updateOn`, `x-debounce` | When the value is written back. |
+| `x-step` | The control's granularity, as distinct from a `multipleOf` constraint. |
+| `x-accept`, `x-multiple`, `x-maxFileSize` | File upload constraints. |
+| `x-visibleWhen`, `x-disabledWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. |
+| `x-clearOnHide` | Clear the value when the field is hidden. |
+| `x-attributes`, `x-inputAttributes` | Renderer hints and extra HTML attributes. |
+| `x-steps` | Wizard steps, each with `id`, `title`, `fields` and an optional `visibleWhen`. |
+| `enumNames`, `examples` | Labels matching the `enum` values; `<datalist>` suggestions. |
+
+Conditions, rules and renderer hints backed by code (`VisibleWhen(predicate)`, `Must`, `MustAsync`, a
+delegate stashed in `Attributes`) have no JSON form and are omitted from the export rather than
+approximated.
 
 ## Validation
 
@@ -124,26 +197,92 @@ Built-in rules are added through the field builder:
     .Pattern("^[a-z0-9_]+$", "Lowercase letters, numbers and underscores only"))
 ```
 
-Custom rules:
+Custom, async and cross-field rules:
 
 ```csharp
 .Field(x => x.Password, f => f
     .AsPassword()
     .Must(value => value is string s && s.Length >= 8, "At least 8 characters"))
+
+.Field(x => x.ConfirmPassword, f => f
+    .AsPassword()
+    .MatchesField(nameof(Model.Password), "Password"))
+
+.Field(x => x.Username, f => f
+    .MustAsync(async ctx => await users.IsAvailableAsync((string?)ctx.Value ?? ""), "That username is taken."))
 ```
+
+Async rules are skipped while the user types and run on blur and on submit.
+
+Rules can also be scoped to a condition, the way FluentValidation's `.When(…)` works:
+
+```csharp
+.Field(x => x.CompanyName, f => f
+    .When(nameof(Model.IsBusiness), BlazorFormConditionOperator.IsTrue, null, w => w
+        .Required("Business accounts need a company name.")
+        .MinLength(3)))
+```
+
+Two details worth knowing:
+
+- **`Required()` on a checkbox means "must be ticked"** — the same thing HTML's own `required`
+  attribute means, and what "I accept the terms" always needs. On any other field type, `false` is a
+  perfectly good value.
+- **A value the model cannot accept is reported, not swallowed.** Typing `abc` into a field bound to
+  an `int` leaves the model on its last valid value and raises a validation message naming the entry,
+  rather than silently discarding it on the next render.
+
+Rules that need the whole model live on the form:
+
+```csharp
+BlazorFormBuilder.For<Booking>()
+    .Field(x => x.Start)
+    .Field(x => x.End)
+    .MustAll(m => m.End >= m.Start, "End must be on or after start.", nameof(Booking.End))
+    .Build();
+```
+
+### When validation runs
+
+```csharp
+var state = new BlazorFormState(definition, accessor)
+{
+    ValidationTrigger   = BlazorFormValidationTrigger.OnBlur,   // before the first submit
+    RevalidationTrigger = BlazorFormValidationTrigger.OnChange  // after it
+};
+```
+
+A field that already shows an error always revalidates eagerly, so the error clears as soon as it is fixed.
+
+### Localisation
+
+Register an `IBlazorFormMessageProvider` to replace the built-in English text — typically one wrapping `IStringLocalizer`:
+
+```csharp
+builder.Services.AddBlazorFormMessages<MyMessageProvider>();
+```
+
+It covers everything the library renders, not only the validation messages: the submit and reset
+buttons, a wizard's Back/Next, the select placeholder and its loading state, a repeater's add/remove
+labels and empty state, the error summary heading, the character counter. The keys are listed on
+`BlazorFormMessageKeys`; anything a provider does not recognise should fall through to the key itself.
+
+Messages passed explicitly to a rule — and labels passed explicitly to `BlazorFormView` — always win
+over the provider.
 
 ### FluentValidation
 
 Wire up a FluentValidation validator on the form state. Failure property paths
-(e.g. `Address.City`, `Items[0].Product`) map directly onto field paths.
+(e.g. `Address.City`, `Items[0].Product`) map directly onto field paths, and failures landing on a
+field the schema is currently hiding are dropped — a validator sees the whole model and knows nothing
+about the form's conditions, so without that a rule on an abandoned branch would refuse the submit and
+point at a control that is not on the page.
 
 ```csharp
 using BlazorForm;
 
 var state = new BlazorFormState(definition, new BlazorFormModelDataAccessor(model), serviceProvider)
     .UseFluentValidation(new ContactValidator());
-
-// Pass the pre-configured state to the view
 ```
 
 ```razor
@@ -155,11 +294,29 @@ matching `IValidator<TModel>` is resolved from the service provider.
 
 ## Conditional fields and wizards
 
-Show or disable fields based on other values:
+Show, disable or conditionally require fields based on other values:
 
 ```csharp
 .Field(x => x.CompanyName, f => f
-    .VisibleWhen(nameof(Model.IsBusiness), BlazorFormConditionOperator.Equals, true))
+    .VisibleWhen(nameof(Model.IsBusiness), BlazorFormConditionOperator.IsTrue)
+    .RequiredWhen(nameof(Model.IsBusiness), BlazorFormConditionOperator.IsTrue)
+    .ClearOnHide())
+```
+
+`ClearOnHide` empties the value as soon as the field disappears, so a branch the user abandoned
+never contributes data to the submitted model.
+
+Inside a repeater, a condition means **that row**. Paths are resolved against the object that owns the
+field before falling back to the root, exactly as a computed value's dependencies are — so one row can
+ask for an email while the next asks for a phone number:
+
+```csharp
+.Array(x => x.Contacts, row => row
+    .Field(c => c.Kind, f => f.AsRadio().Options(("email", "Email"), ("phone", "Phone")))
+    .Field(c => c.Email, f => f
+        .VisibleWhen("Kind", BlazorFormConditionOperator.Equals, "email")   // this row's Kind
+        .RequiredWhen("Kind", BlazorFormConditionOperator.Equals, "email")
+        .ClearOnHide()))
 ```
 
 Split a form into steps:
@@ -172,6 +329,115 @@ BlazorFormBuilder.For<Order>()
 ```
 
 `BlazorFormView` renders a stepper, Back/Next navigation, and validates each step before advancing.
+Hidden steps are skipped and the visible ones stay contiguously numbered; completed steps are
+clickable unless you set `AllowStepNavigation="false"`.
+
+A hidden step is hidden in every sense: its fields are not rendered, not validated on submit, and never
+the reason a form refuses to submit. If a condition hides the step the user is standing on, the wizard
+falls back to the nearest visible one rather than stranding them. Changing step moves focus to the new
+step's content, so the change is not invisible to a keyboard or screen-reader user.
+
+## Async and cascading options
+
+Options can be loaded on demand and refreshed when another field changes:
+
+```csharp
+.Field(x => x.City, f => f
+    .Required()
+    .OptionsFrom(
+        load:      async ctx => await cities.ForCountryAsync(ctx.Value("Country") as string, ctx.CancellationToken),
+        value:     c => c.Code,
+        label:     c => c.Name,
+        dependsOn: nameof(Model.Country)))
+```
+
+When `Country` changes the cached options are dropped and the now-invalid selection is cleared.
+
+## Computed values
+
+A field can derive its value from the rest of the form instead of being typed in — a line total, a
+full name, a price after discount:
+
+```csharp
+BlazorFormBuilder.For<Invoice>()
+    .Field(x => x.Customer, f => f.Required())
+    .Array(x => x.Lines, line => line
+        .Field(l => l.Quantity)
+        .Field(l => l.UnitPrice)
+        // Evaluated against the *line*, so it works on every row without knowing its index.
+        .Computed(l => l.LineTotal, l => l.Quantity * l.UnitPrice,
+                  dependsOn: ["Quantity", "UnitPrice"]))
+    .Computed(x => x.Total, m => m.Lines.Sum(l => l.Quantity * l.UnitPrice),
+              dependsOn: [nameof(Invoice.Lines)])
+    .Build();
+```
+
+Computed fields are read-only by default, seeded when the form is created, and refreshed whenever a
+declared dependency changes — including changes inside an array. One computed field may depend on
+another; a set of formulas that reference each other in a cycle settles rather than recursing.
+
+Dependencies are named relative to the object that owns the field, so `"Quantity"` on a repeater row
+means that row's quantity. The untyped builder takes a context instead:
+`f.Computed(ctx => ctx.Sibling("width"), "width")`.
+
+## Layout
+
+Set a column count on the form and let individual fields span more than one. The grid collapses to a
+single column on narrow screens.
+
+```csharp
+BlazorFormBuilder.For<Profile>()
+    .Columns(2)
+    .Field(x => x.FirstName)
+    .Field(x => x.LastName)
+    .Field(x => x.Bio, f => f.AsTextArea(4).ColumnSpan(2))
+    .Build();
+```
+
+## Field presentation
+
+The details that separate a generated form from a designed one:
+
+```csharp
+BlazorFormBuilder.For<Listing>()
+    // A section heading that belongs to the schema, not to the page around it.
+    .Static("basics", "The basics", "What someone sees first in the search results.")
+
+    .Field(x => x.Title, f => f
+        .MaxLength(60)
+        .CharacterCount()                       // a live "12 / 60"
+        .UpdateOnInput())                       // write on every keystroke, not on blur
+
+    .Field(x => x.Summary, f => f
+        .AsTextArea(3)
+        .UpdateOnInput(debounceMilliseconds: 150))  // one write per pause, not per character
+
+    .Field(x => x.Price, f => f.Prefix("€").Suffix("/ month"))
+    .Field(x => x.City, f => f
+        .Suggest("Amsterdam", "Berlin", "Lisbon")   // proposes; does not restrict
+        .Clearable())
+    .Field(x => x.Passcode, f => f.AsPassword().Revealable())
+    .Field(x => x.Published, f => f.AsSwitch())
+    .Field(x => x.Query, f => f
+        .HideLabel()                            // stays the accessible name
+        .InputAttr("data-testid", "search"))    // any HTML attribute you like
+    .Build();
+```
+
+`UpdateOnInput` matters more than it looks: the browser's `change` event fires on *blur* for a text
+box, so without it the model does not see a keystroke until the user leaves the field. The `input`
+handler is only wired when a field actually needs it, so nothing pays for a round-trip per keystroke
+it has no use for.
+
+## Checking a schema
+
+`Validate()` reports the mistakes that are easy to make and hard to see. It is a development aid, never
+run automatically — a schema being edited at runtime has every right to be incomplete:
+
+```csharp
+foreach (var problem in definition.Validate())
+    logger.LogWarning("{Problem}", problem);   // [Error] Lines: An array field has no ItemTemplate…
+```
 
 ## Service registration
 
@@ -181,11 +447,13 @@ optionally register custom renderers:
 ```csharp
 builder.Services.AddBlazorForm(registry =>
 {
-    registry.RegisterCustom("rating", typeof(StarRatingInput));
+    registry.RegisterCustom<StarRatingInput>("rating");
 });
 ```
 
-Custom input components inherit from `BlazorFormInputBase`.
+Custom input components inherit from `BlazorFormInputBase`. A field of type
+`BlazorFormFieldType.Custom` whose renderer key is not registered throws with a message naming the
+key, rather than silently falling back to a text box.
 
 ## The `BlazorFormView` component
 
@@ -197,15 +465,53 @@ Custom input components inherit from `BlazorFormInputBase`.
 | `State` | Provide a pre-configured `BlazorFormState` (e.g. with FluentValidation wired up). |
 | `OnValidSubmit` | Raised with the state after a successful (valid) submit. |
 | `OnInvalidSubmit` | Raised after a submit that failed validation. |
-| `ShowSubmitButton` | Whether to render the built-in submit button (default `true`). |
-| `SubmitText` | Text for the submit button (default `"Submit"`). |
+| `OnFieldChanged` | Raised with the path of a field whose value changed. |
+| `ReadOnly` | Renders every field read-only (review mode) and hides the buttons. |
+| `ShowSubmitButton` / `SubmitText` | The built-in submit button (default `true` / `"Submit"`). |
+| `ShowResetButton` / `ResetText` | A button restoring the values the form started with. |
+| `ShowErrorSummary` | Lists every error above the form, each linking to its field. |
+| `FocusFirstError` | Moves focus to the first invalid field after a failed submit (default `true`; suppressed while `ShowErrorSummary` is on, since the summary takes focus itself). |
+| `AllowStepNavigation` | Lets the user click back to a completed wizard step (default `true`). |
+| `BackText` / `NextText` | Wizard navigation labels. |
+| `Header` / `Footer` / `Actions` | Render fragments for extra content and a custom button row. |
+| `Class` | Extra CSS classes for the `<form>` element. |
 | `ChildContent` | Extra content rendered inside the `<form>`. |
+
+Any other attribute you set is splatted onto the `<form>` element.
+
+When you let the view build its own state from `Definition`, capture the component to reach it:
+
+```razor
+<BlazorFormView @ref="_form" Definition="_definition" Model="_model" />
+
+<button @onclick="() => _form.Form.Reset()" disabled="@(!_form.Form.IsFormDirty)">Undo</button>
+
+@code { private BlazorFormView _form = default!; }
+```
+
+## `BlazorFormState` at a glance
+
+| Member | Purpose |
+| --- | --- |
+| `GetValue` / `SetValue` / `SetValueQuietly` | Read and write by path; the quiet variant does not mark the field touched. |
+| `SetValues` / `Batch` | Write many values as one change — one re-render, not one per field. |
+| `IsFormDirty`, `DirtyFields`, `TouchedFields` | Change tracking. |
+| `IsValidating`, `IsSubmitting`, `IsSubmitted`, `SubmitCount`, `IsValid`, `HasValidated` | Submission state. `IsValid` reports what validation has *found*, so check `HasValidated` before treating it as a verdict — a form nobody has validated has no errors. |
+| `SubmitAsync` | Marks everything touched, validates, and dispatches — ignoring re-entrant calls. |
+| `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. |
+| `MessagesFor`, `AllMessages`, `OrderedMessages`, `SetServerError(s)` | Validation messages. |
+| `Reset` / `AcceptChanges` | Restore the starting values, or make the current ones the new baseline. |
+| `AddArrayItem`, `InsertArrayItem`, `DuplicateArrayItem`, `RemoveArrayItem`, `MoveArrayItem` | Repeater operations; messages, touched and dirty state follow their items. |
+| `FocusAsync(path)` | Moves focus to the control rendering a path; false when nothing is rendering it. |
+| `Text(key, args)` | Resolves the library's own UI text through the registered message provider. |
+| `NextStepAsync`, `PreviousStep`, `GoToStep`, `VisibleSteps`, `CurrentStepNumber` | Wizard navigation. |
+| `ReadOnly` | Makes the whole form read-only. |
 
 ## Key types
 
 | Type | Purpose |
 | --- | --- |
-| `BlazorFormDefinition` | The schema: fields, wizard steps and metadata. |
+| `BlazorFormDefinition` | The schema: fields, wizard steps, form-level rules and metadata. |
 | `BlazorFormFieldDefinition` / `BlazorFormFieldType` | A single field and its logical type. |
 | `BlazorFormBuilder` / `BlazorFormBuilder<TModel>` | Fluent schema builders. |
 | `BlazorFormSchemaGenerator` | Reflection + DataAnnotations schema generation. |
@@ -213,21 +519,26 @@ Custom input components inherit from `BlazorFormInputBase`.
 | `BlazorFormState` | Runtime state: data, validation, dirty/touched tracking, wizard position. |
 | `BlazorFormModelDataAccessor` / `BlazorFormDictionaryDataAccessor` | Data backing stores. |
 | `IBlazorFormFieldRendererRegistry` | Maps field types to renderer components. |
+| `IBlazorFormMessageProvider` | Supplies the text of built-in validation messages. |
 
 ## Project layout
 
 ```
 src/BlazorForm
 ├── Building/      Fluent form & field builders
-├── Components/    Razor components (BlazorFormView, field & input views)
+├── Components/    Razor components (BlazorFormView, field, input and summary views)
 ├── Data/          Data accessors (model & dictionary) and form paths
 ├── Generation/    Reflection + DataAnnotations schema generation
 ├── Json/          JSON Schema import/export
 ├── Rendering/     Field context, value conversion and renderer registry
 ├── State/         Runtime form state
-├── Validation/    Validation rules and the validator
+├── Validation/    Validation rules, messages and the validator
 └── Schema/        Field types and schema model
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

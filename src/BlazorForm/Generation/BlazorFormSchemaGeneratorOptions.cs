@@ -8,4 +8,29 @@ public sealed class BlazorFormSchemaGeneratorOptions
 
     /// <summary>When true, properties marked <c>[ScaffoldColumn(false)]</c> are skipped.</summary>
     public bool HonorScaffoldColumn { get; set; } = true;
+
+    /// <summary>
+    /// How to treat a property with no setter. Computed properties are usually worth showing but never
+    /// worth letting the user edit, so the default renders them read-only rather than dropping them.
+    /// </summary>
+    public BlazorFormReadOnlyPropertyHandling ReadOnlyProperties { get; set; } = BlazorFormReadOnlyPropertyHandling.RenderReadOnly;
+
+    /// <summary>Property names to leave out of the generated schema (case-insensitive).</summary>
+    public ISet<string> IgnoredProperties { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Called for every generated field, after DataAnnotations have been applied — the hook for
+    /// project-wide conventions such as "every field named *Email gets autocomplete".
+    /// </summary>
+    public Action<BlazorFormFieldDefinition>? ConfigureField { get; set; }
+}
+
+/// <summary>What <see cref="BlazorFormSchemaGenerator"/> does with get-only properties.</summary>
+public enum BlazorFormReadOnlyPropertyHandling
+{
+    /// <summary>Include them, marked read-only.</summary>
+    RenderReadOnly,
+
+    /// <summary>Leave them out of the schema entirely.</summary>
+    Skip
 }

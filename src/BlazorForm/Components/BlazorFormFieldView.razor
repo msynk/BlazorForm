@@ -1,25 +1,33 @@
 @namespace BlazorForm
 @inject IBlazorFormFieldRendererRegistry Registry
 
-@if (State.IsVisible(Field))
+@if (State.IsVisible(Field, Path))
 {
     @if (Field.Type == BlazorFormFieldType.Hidden)
     {
         <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
     }
+    else if (Field.Type == BlazorFormFieldType.Static)
+    {
+        @* Presentational content binds to no value, so it gets no label, no messages and no field
+           wrapper — only the grid placement that lets it span a row. *@
+        <div class="ff-field ff-field--static" style="@GridStyle">
+            <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
+        </div>
+    }
     else if (Field.Type == BlazorFormFieldType.Object)
     {
-        <fieldset class="ff-group">
+        <fieldset class="ff-group" style="@GridStyle" disabled="@State.IsDisabled(Field, Path)">
             @if (!string.IsNullOrEmpty(Field.Label))
             {
                 <legend class="ff-group__legend">@Field.Label</legend>
             }
             @if (!string.IsNullOrEmpty(Field.HelpText))
             {
-                <p class="ff-help">@Field.HelpText</p>
+                <p class="ff-help" id="@Context.HelpId">@Field.HelpText</p>
             }
-            <div class="ff-group__body">
-                @foreach (var child in Ordered(Field.Children))
+            <div class="ff-group__body @(ChildColumns > 1 ? "ff-grid" : "")" style="@ChildGridStyle">
+                @foreach (var child in Field.Children.OrderBy(c => c.Order))
                 {
                     <BlazorFormFieldView State="State" Field="child" Path="@BlazorFormPath.Combine(Path, child.Name)" />
                 }
@@ -32,31 +40,52 @@
     }
     else if (Field.Type == BlazorFormFieldType.Checkbox)
     {
-        <div class="ff-field ff-field--checkbox @(Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "")">
+        @* A checkbox labels itself, so it gets no separate <label> — that would announce twice. *@
+        <div class="ff-field ff-field--checkbox @InvalidClass" style="@GridStyle">
             <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
             @if (!string.IsNullOrEmpty(Field.HelpText))
             {
-                <p class="ff-help">@Field.HelpText</p>
+                <p class="ff-help" id="@Context.HelpId">@Field.HelpText</p>
             }
-            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" />
+            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" Id="@Context.ErrorId" />
         </div>
     }
     else
     {
-        <div class="ff-field @(Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "")">
-            <label class="ff-label" for="@Context.ElementId">
-                @(Field.Label ?? Field.Name)
-                @if (Field.Required)
-                {
-                    <span class="ff-required" aria-hidden="true">*</span>
-                }
-            </label>
+        <div class="ff-field @InvalidClass" style="@GridStyle">
+            @* Radio and multi-select groups are labelled through aria-labelledby, not `for`, because
+               there is no single control to point at. A field that opts out of a visible label still
+               carries one: the input picks it up as aria-label, so the control is never anonymous. *@
+            @if (!Field.ShowLabel)
+            {
+                @* nothing visible — see BlazorFormInputBase.AriaLabel *@
+            }
+            else if (IsGroupInput)
+            {
+                <span class="ff-label" id="@Context.LabelId">
+                    @LabelText
+                    @if (Context.IsRequired)
+                    {
+                        <span class="ff-required" aria-hidden="true">*</span>
+                    }
+                </span>
+            }
+            else
+            {
+                <label class="ff-label" id="@Context.LabelId" for="@Context.ElementId">
+                    @LabelText
+                    @if (Context.IsRequired)
+                    {
+                        <span class="ff-required" aria-hidden="true">*</span>
+                    }
+                </label>
+            }
             <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
             @if (!string.IsNullOrEmpty(Field.HelpText))
             {
-                <p class="ff-help">@Field.HelpText</p>
+                <p class="ff-help" id="@Context.HelpId">@Field.HelpText</p>
             }
-            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" />
+            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" Id="@Context.ErrorId" />
         </div>
     }
 }
@@ -66,13 +95,128 @@
     [Parameter, EditorRequired] public BlazorFormFieldDefinition Field { get; set; } = default!;
     [Parameter, EditorRequired] public string Path { get; set; } = default!;
 
-    private BlazorFormFieldContext Context => new(State, Field, Path);
+    private BlazorFormFieldContext _context = default!;
+    private IDictionary<string, object> _params = default!;
+    private RenderSignature _signature;
+    private bool _hasRendered;
 
-    private IDictionary<string, object> Params => new Dictionary<string, object>
+    /// <summary>
+    /// The context is rebuilt only when the field it describes changes, not on every render — it is
+    /// handed to a DynamicComponent, and a fresh instance per render would churn its parameters.
+    /// </summary>
+    private BlazorFormFieldContext Context => _context;
+
+    private IDictionary<string, object> Params => _params;
+
+    protected override void OnParametersSet()
     {
-        ["Context"] = Context
-    };
+        if (_context is null || !ReferenceEquals(_context.Field, Field) || _context.Path != Path
+            || !ReferenceEquals(_context.State, State))
+        {
+            _context = new BlazorFormFieldContext(State, Field, Path);
+            _params = new Dictionary<string, object> { ["Context"] = _context };
 
-    private static IEnumerable<BlazorFormFieldDefinition> Ordered(IEnumerable<BlazorFormFieldDefinition> fields)
-        => fields.OrderBy(f => f.Order);
+            // Prime the signature for the render that is about to happen. ShouldRender is not called
+            // for a component's first render, so without this the first change anywhere on the form
+            // would re-render every field just to establish a baseline.
+            if (!Field.IsContainer)
+            {
+                _signature = Capture();
+                _hasRendered = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Skips re-rendering when nothing this field displays has changed. A form re-renders as a whole
+    /// whenever any value changes, so without this every keystroke would re-diff every control; with
+    /// it, only the fields whose own state moved are touched.
+    /// </summary>
+    /// <remarks>
+    /// Container fields always render — their cost is a wrapper element, and their children make the
+    /// same decision for themselves. A renderer that reads values other than its own field's can opt
+    /// out with <c>Attr("alwaysRender", true)</c>.
+    /// </remarks>
+    protected override bool ShouldRender()
+    {
+        if (Field.IsContainer || AlwaysRender) return true;
+
+        var signature = Capture();
+        if (_hasRendered && signature.Equals(_signature)) return false;
+
+        _signature = signature;
+        _hasRendered = true;
+        return true;
+    }
+
+    private bool AlwaysRender
+        => Field.Attributes.TryGetValue("alwaysRender", out var v) && v is true;
+
+    private RenderSignature Capture() => new(
+        State.IsVisible(Field, Path),
+        State.IsDisabled(Field, Path),
+        State.IsReadOnly(Field),
+        State.IsRequired(Field, Path),
+        Context.ShowMessages,
+        Context.Value,
+        State.MessagesFor(Path),
+        State.IsLoadingOptions(Path),
+        Context.Options.Count);
+
+    /// <summary>
+    /// Everything the rendered output of one field depends on. Messages are compared by reference:
+    /// the state replaces the list whenever a field revalidates, so a new list means new content.
+    /// </summary>
+    private readonly record struct RenderSignature(
+        bool Visible,
+        bool Disabled,
+        bool ReadOnly,
+        bool Required,
+        bool ShowMessages,
+        object? Value,
+        IReadOnlyList<BlazorFormValidationMessage> Messages,
+        bool LoadingOptions,
+        int OptionCount)
+    {
+        public bool Equals(RenderSignature other)
+            => Visible == other.Visible
+               && Disabled == other.Disabled
+               && ReadOnly == other.ReadOnly
+               && Required == other.Required
+               && ShowMessages == other.ShowMessages
+               && LoadingOptions == other.LoadingOptions
+               && OptionCount == other.OptionCount
+               && ReferenceEquals(Messages, other.Messages)
+               && ValuesMatch(Value, other.Value);
+
+        public override int GetHashCode() => HashCode.Combine(Visible, Disabled, ReadOnly, Required, ShowMessages, OptionCount);
+
+        /// <summary>
+        /// Compares two field values. Mutable references (a list a multi-select rebuilt in place, say)
+        /// are treated as changed unless they are the same instance *and* value-equal, so an edit is
+        /// never missed.
+        /// </summary>
+        private static bool ValuesMatch(object? a, object? b)
+        {
+            if (ReferenceEquals(a, b)) return a is null || a is string || a.GetType().IsValueType;
+            return a is not null && b is not null && a.Equals(b);
+        }
+    }
+
+    private string LabelText => Field.Label ?? Field.Name;
+
+    private bool IsGroupInput => Field.Type is BlazorFormFieldType.Radio or BlazorFormFieldType.MultiSelect;
+
+    private string InvalidClass => Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "";
+
+    /// <summary>Column span for a field inside a grid layout; null when it spans a single column.</summary>
+    private string? GridStyle => Field.ColumnSpan is { } span && span > 1
+        ? $"grid-column: span {span};"
+        : null;
+
+    private int ChildColumns
+        => Field.Attributes.TryGetValue("columns", out var raw) && raw is int cols ? cols : 1;
+
+    private string? ChildGridStyle
+        => ChildColumns > 1 ? $"grid-template-columns: repeat({ChildColumns}, minmax(0, 1fr));" : null;
 }

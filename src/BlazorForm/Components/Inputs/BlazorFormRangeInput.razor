@@ -2,18 +2,33 @@
 @inherits BlazorFormInputBase
 
 <div class="ff-range">
-    <input id="@Context.ElementId"
+    @* Splat first so the renderer's own attributes below always win. *@
+    <input @attributes="ExtraAttributes"
+           id="@Context.ElementId"
+           @ref="Element"
            class="ff-range__slider"
            type="range"
            value="@Context.StringValue"
-           disabled="@Disabled"
-           min="@(Field.Min ?? 0)"
-           max="@(Field.Max ?? 100)"
+           disabled="@DisabledOrReadOnly"
+           min="@(MinAttribute ?? "0")"
+           max="@(MaxAttribute ?? "100")"
            step="@Step"
-           @oninput="OnChange" />
-    <output class="ff-range__value">@Context.StringValue</output>
+           aria-required="@AriaRequired"
+           aria-invalid="@AriaInvalid"
+           aria-label="@AriaLabel"
+           aria-describedby="@DescribedBy"
+           @oninput="OnSlide"
+           @onblur="OnBlur" />
+    <output class="ff-range__value" for="@Context.ElementId" aria-live="off">@Display</output>
 </div>
 
 @code {
-    private string Step => Field.NumericStep?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "1";
+    private string Step => BlazorFormNumber.ToAttribute(Field.NumericStep) ?? "1";
+
+    // A slider has no meaningful "commit" moment — dragging *is* the interaction — so it always writes
+    // live, whatever the field's update trigger says.
+    private Task OnSlide(ChangeEventArgs e) => Context.SetFromStringAsync(e.Value?.ToString());
+
+    /// <summary>The readout beside the slider, with the field's affixes so "70" can read as "70 kg".</summary>
+    private string Display => $"{Field.Prefix}{Context.StringValue}{Field.Suffix}";
 }

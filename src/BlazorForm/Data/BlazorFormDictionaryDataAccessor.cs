@@ -1,3 +1,5 @@
+using System.Collections;
+
 namespace BlazorForm;
 
 /// <summary>
@@ -14,6 +16,13 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
 
     public object? Root => _root;
 
+    /// <summary>
+    /// True when the most recent <see cref="SetValue"/> could not be applied because an existing value
+    /// on the path was not the container the path required (for example writing <c>a.b</c> when
+    /// <c>a</c> already holds a string).
+    /// </summary>
+    public bool LastWriteFailed { get; private set; }
+
     public object? GetValue(string path)
     {
         var segments = BlazorFormPath.Parse(path);
@@ -23,7 +32,7 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
             if (current is null) return null;
             if (seg.IsIndex)
             {
-                if (current is IList<object?> list && seg.Index >= 0 && seg.Index < list.Count)
+                if (current is IList list && seg.Index >= 0 && seg.Index < list.Count)
                     current = list[seg.Index];
                 else
                     return null;
@@ -32,6 +41,8 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
             {
                 if (current is IDictionary<string, object?> dict && dict.TryGetValue(seg.Name!, out var v))
                     current = v;
+                else if (current is IDictionary untyped && untyped.Contains(seg.Name!))
+                    current = untyped[seg.Name!];
                 else
                     return null;
             }
@@ -41,6 +52,8 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
 
     public void SetValue(string path, object? value)
     {
+        LastWriteFailed = false;
+
         var segments = BlazorFormPath.Parse(path);
         if (segments.Count == 0) return;
 
@@ -52,15 +65,18 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
 
             if (seg.IsIndex)
             {
-                var list = (IList<object?>)current;
+                // The path says "index into this", but the value here is not a list — writing anyway
+                // would throw, so the write is abandoned and reported instead.
+                if (current is not IList list) { LastWriteFailed = true; return; }
                 EnsureListSize(list, seg.Index);
-                list[seg.Index] ??= CreateContainer(next);
+                if (list[seg.Index] is null || !IsContainerFor(list[seg.Index], next))
+                    list[seg.Index] = CreateContainer(next);
                 current = list[seg.Index]!;
             }
             else
             {
-                var dict = (IDictionary<string, object?>)current;
-                if (!dict.TryGetValue(seg.Name!, out var child) || child is null)
+                if (current is not IDictionary<string, object?> dict) { LastWriteFailed = true; return; }
+                if (!dict.TryGetValue(seg.Name!, out var child) || child is null || !IsContainerFor(child, next))
                 {
                     child = CreateContainer(next);
                     dict[seg.Name!] = child;
@@ -72,22 +88,31 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
         var last = segments[^1];
         if (last.IsIndex)
         {
-            var list = (IList<object?>)current;
+            if (current is not IList list) { LastWriteFailed = true; return; }
             EnsureListSize(list, last.Index);
             list[last.Index] = value;
         }
         else
         {
-            ((IDictionary<string, object?>)current)[last.Name!] = value;
+            if (current is not IDictionary<string, object?> dict) { LastWriteFailed = true; return; }
+            dict[last.Name!] = value;
         }
     }
 
+    /// <summary>
+    /// Element types are unknown in a schema-only form, so items are created as loosely-typed
+    /// dictionaries and values are stored as they arrive.
+    /// </summary>
     public Type? GetElementType(string arrayPath) => typeof(object);
 
     private static object CreateContainer(BlazorFormPathSegment next)
         => next.IsIndex ? new List<object?>() : new Dictionary<string, object?>();
 
-    private static void EnsureListSize(IList<object?> list, int index)
+    /// <summary>Whether an existing value is already the right kind of container for the next segment.</summary>
+    private static bool IsContainerFor(object? existing, BlazorFormPathSegment next)
+        => next.IsIndex ? existing is IList : existing is IDictionary<string, object?>;
+
+    private static void EnsureListSize(IList list, int index)
     {
         while (list.Count <= index)
             list.Add(null);

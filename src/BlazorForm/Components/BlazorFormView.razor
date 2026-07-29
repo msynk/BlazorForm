@@ -2,7 +2,11 @@
 @implements IDisposable
 @inject IServiceProvider ServiceProvider
 
-<form class="ff-form" @onsubmit="HandleSubmit" @onsubmit:preventDefault="true">
+@* novalidate: BlazorForm owns validation. Without it the browser would also enforce `pattern` and
+   `maxlength` using JavaScript regex semantics, silently blocking submit with a bubble the app cannot
+   style, translate or read. *@
+<form class="ff-form @(Class)" novalidate aria-busy="@(Busy ? "true" : null)"
+      @onsubmit="HandleSubmit" @onsubmit:preventDefault="true" @attributes="AdditionalAttributes">
     @if (!string.IsNullOrEmpty(FormState.Definition.Title))
     {
         <h2 class="ff-form__title">@FormState.Definition.Title</h2>
@@ -12,67 +16,128 @@
         <p class="ff-form__description">@FormState.Definition.Description</p>
     }
 
+    @Header
+
+    @if (ShowErrorSummary)
+    {
+        <BlazorFormErrorSummary State="FormState" />
+    }
+
+    @* Messages from form-level rules belong to no single field, so they would be invisible without
+       somewhere of their own to live. *@
+    @if (FormLevelMessages.Count > 0)
+    {
+        <BlazorFormValidationMessages Messages="FormLevelMessages" Show="FormState.IsSubmitted" Id="ff_form_errors" />
+    }
+
     @if (FormState.Definition.IsWizard)
     {
+        @* A landmark with a name, so a screen reader can jump straight to "where am I in this form".
+           The count is announced politely, because it changes when a conditional step appears. *@
+        <nav class="ff-stepper-nav" aria-label="@StepperLabelText">
+        <p class="ff-sr-only" aria-live="polite">@StepAnnouncement</p>
         <ol class="ff-stepper">
+            @{ var number = 0; }
             @for (var s = 0; s < FormState.Definition.Steps.Count; s++)
             {
                 var step = FormState.Definition.Steps[s];
                 if (!FormState.IsStepVisible(step)) { continue; }
                 var index = s;
-                <li class="ff-stepper__step @(index == FormState.CurrentStepIndex ? "is-active" : "") @(index < FormState.CurrentStepIndex ? "is-done" : "")">
-                    <span class="ff-stepper__num">@(index + 1)</span>
-                    <span class="ff-stepper__label">@(step.Title ?? step.Id)</span>
+                number++;
+                var displayNumber = number;
+                <li class="ff-stepper__step @(index == FormState.CurrentStepIndex ? "is-active" : "") @(index < FormState.CurrentStepIndex ? "is-done" : "")"
+                    aria-current="@(index == FormState.CurrentStepIndex ? "step" : null)">
+                    @if (AllowStepNavigation && index < FormState.CurrentStepIndex)
+                    {
+                        @* Only completed steps are clickable: jumping forward would skip the validation
+                           that gates each step. *@
+                        <button type="button" class="ff-stepper__link" @onclick="@(() => FormState.GoToStep(index))">
+                            <span class="ff-stepper__num">@displayNumber</span>
+                            <span class="ff-stepper__label">@(step.Title ?? step.Id)</span>
+                        </button>
+                    }
+                    else
+                    {
+                        <span class="ff-stepper__num">@displayNumber</span>
+                        <span class="ff-stepper__label">@(step.Title ?? step.Id)</span>
+                    }
                 </li>
             }
         </ol>
+        </nav>
 
         var current = FormState.CurrentStep!;
-        <div class="ff-step-body">
+        @* tabindex="-1" so changing step can put focus here. Nothing else on the page moves when the
+           step does, so without it a keyboard or screen-reader user is left standing on the Next
+           button with no indication that the content beneath it was replaced. *@
+        <div class="ff-step-body @GridClass" style="@GridStyle" tabindex="-1" @ref="_stepBody">
             @if (!string.IsNullOrEmpty(current.Description))
             {
                 <p class="ff-form__description">@current.Description</p>
             }
             @foreach (var name in current.Fields)
             {
-                var field = FormState.Definition.FindField(name);
+                var field = FormState.Definition.FindByPath(name);
                 if (field is not null)
                 {
-                    <BlazorFormFieldView State="FormState" Field="field" Path="@field.Name" />
+                    <BlazorFormFieldView State="FormState" Field="field" Path="@name" />
                 }
             }
         </div>
 
         <div class="ff-form__actions">
-            <button type="button" class="ff-btn" disabled="@FormState.IsFirstStep" @onclick="FormState.PreviousStep">Back</button>
-            @if (FormState.IsLastStep)
+            @if (Actions is not null)
             {
-                <button type="submit" class="ff-btn ff-btn--primary" disabled="@FormState.IsValidating">@SubmitText</button>
+                @Actions(FormState)
             }
             else
             {
-                <button type="button" class="ff-btn ff-btn--primary" @onclick="Next">Next</button>
+                <button type="button" class="ff-btn" disabled="@(FormState.IsFirstStep || Busy)" @onclick="Previous">@BackLabel</button>
+                @if (FormState.IsLastStep)
+                {
+                    <button type="submit" class="ff-btn ff-btn--primary" disabled="@Busy">@SubmitLabel</button>
+                }
+                else
+                {
+                    <button type="button" class="ff-btn ff-btn--primary" disabled="@Busy" @onclick="Next">@NextLabel</button>
+                }
+                @if (ShowResetButton)
+                {
+                    <button type="button" class="ff-btn ff-btn--ghost" disabled="@Busy" @onclick="Reset">@ResetLabel</button>
+                }
             }
         </div>
     }
     else
     {
-        <div class="ff-form__body">
-            @foreach (var field in FormState.Definition.Fields.OrderBy(f => f.Order))
+        <div class="ff-form__body @GridClass" style="@GridStyle">
+            @foreach (var field in FormState.Definition.OrderedFields())
             {
                 <BlazorFormFieldView State="FormState" Field="field" Path="@field.Name" />
             }
         </div>
 
-        @if (ShowSubmitButton)
+        @if (Actions is not null)
+        {
+            <div class="ff-form__actions">@Actions(FormState)</div>
+        }
+        else if (!FormState.ReadOnly && (ShowSubmitButton || ShowResetButton))
         {
             <div class="ff-form__actions">
-                <button type="submit" class="ff-btn ff-btn--primary" disabled="@FormState.IsValidating">@SubmitText</button>
+                @if (ShowSubmitButton)
+                {
+                    <button type="submit" class="ff-btn ff-btn--primary" disabled="@Busy">@SubmitLabel</button>
+                }
+                @if (ShowResetButton)
+                {
+                    <button type="button" class="ff-btn ff-btn--ghost" disabled="@Busy" @onclick="Reset">@ResetLabel</button>
+                }
             </div>
         }
     }
 
     @ChildContent
+    @Footer
 </form>
 
 @code {
@@ -94,59 +159,283 @@
     /// <summary>Raised after a submit that failed validation.</summary>
     [Parameter] public EventCallback<BlazorFormState> OnInvalidSubmit { get; set; }
 
+    /// <summary>Raised with the path of a field whose value changed.</summary>
+    [Parameter] public EventCallback<string> OnFieldChanged { get; set; }
+
+    /// <summary>
+    /// Renders every field read-only — a review or "view record" mode that needs no second schema.
+    /// The submit and reset buttons are hidden while it is set. Leave it unset (null) to let a
+    /// caller-supplied state manage its own <see cref="BlazorFormState.ReadOnly"/> flag.
+    /// </summary>
+    [Parameter] public bool? ReadOnly { get; set; }
+
     [Parameter] public bool ShowSubmitButton { get; set; } = true;
-    [Parameter] public string SubmitText { get; set; } = "Submit";
+
+    /// <summary>
+    /// Button labels. Leave them unset and the text comes from the registered
+    /// <see cref="IBlazorFormMessageProvider"/>, so a localised app does not have to pass four strings
+    /// to every form it renders.
+    /// </summary>
+    [Parameter] public string? SubmitText { get; set; }
+
+    /// <summary>Renders a button that restores the form to the values it started with.</summary>
+    [Parameter] public bool ShowResetButton { get; set; }
+
+    /// <inheritdoc cref="SubmitText" />
+    [Parameter] public string? ResetText { get; set; }
+
+    /// <inheritdoc cref="SubmitText" />
+    [Parameter] public string? BackText { get; set; }
+
+    /// <inheritdoc cref="SubmitText" />
+    [Parameter] public string? NextText { get; set; }
+
+    /// <summary>Renders a list of every error above the form, each linking to its field.</summary>
+    [Parameter] public bool ShowErrorSummary { get; set; }
+
+    /// <summary>
+    /// Moves focus to the first field with an error after a failed submit, so a keyboard or
+    /// screen-reader user is taken to the problem instead of having to hunt for it. Suppressed while
+    /// <see cref="ShowErrorSummary"/> is on, because the summary takes focus itself and two components
+    /// competing for it would leave the user wherever the race happened to land.
+    /// </summary>
+    [Parameter] public bool FocusFirstError { get; set; } = true;
+
+    /// <summary>Lets the user click back to an already-completed wizard step.</summary>
+    [Parameter] public bool AllowStepNavigation { get; set; } = true;
+
+    /// <summary>Content rendered above the fields (below the title).</summary>
+    [Parameter] public RenderFragment? Header { get; set; }
+
+    /// <summary>Content rendered below everything else, inside the form element.</summary>
+    [Parameter] public RenderFragment? Footer { get; set; }
+
+    /// <summary>Replaces the built-in button row entirely.</summary>
+    [Parameter] public RenderFragment<BlazorFormState>? Actions { get; set; }
+
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>Extra CSS classes for the form element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)] public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    /// <summary>
+    /// The state this view is bound to — either the one passed in <see cref="State"/> or the one it
+    /// built from <see cref="Definition"/>. Capture the component with <c>@ref</c> to reach it, for
+    /// example to call <c>Reset()</c> or read <c>IsFormDirty</c> from outside the form.
+    /// </summary>
+    public BlazorFormState Form => FormState;
+
     private BlazorFormState FormState { get; set; } = default!;
-    private BlazorFormState? _built;
+
+    // Only a state this component created is disposed by it; a caller-supplied state stays the
+    // caller's responsibility.
+    private BlazorFormState? _owned;
+    private BlazorFormDefinition? _builtFrom;
+    private object? _builtModel;
+    private IDictionary<string, object?>? _builtData;
+
+    private bool Busy => FormState.IsValidating || FormState.IsSubmitting;
+
+    /// <summary>Messages a form-level rule reported without naming a field.</summary>
+    private IReadOnlyList<BlazorFormValidationMessage> FormLevelMessages => FormState.MessagesFor(string.Empty);
+
+    private string GridClass => FormState.Definition.Columns > 1 ? "ff-grid" : "";
+
+    private string? GridStyle => FormState.Definition.Columns > 1
+        ? $"grid-template-columns: repeat({FormState.Definition.Columns}, minmax(0, 1fr));"
+        : null;
 
     protected override void OnParametersSet()
     {
         if (State is not null)
         {
+            DisposeOwned();
             Attach(State);
+            ApplyReadOnly();
             return;
         }
 
-        if (_built is null)
+        if (Definition is null)
+            throw new InvalidOperationException($"{nameof(BlazorFormView)} requires either a {nameof(Definition)} or a {nameof(State)}.");
+
+        // Rebuild when the inputs the state was derived from change, so swapping the schema or the
+        // bound model actually re-renders against the new one instead of silently keeping the old.
+        var stale = _owned is null
+            || !ReferenceEquals(_builtFrom, Definition)
+            || !ReferenceEquals(_builtModel, Model)
+            || !ReferenceEquals(_builtData, Data);
+
+        if (!stale)
         {
-            if (Definition is null)
-                throw new InvalidOperationException($"{nameof(BlazorFormView)} requires either a {nameof(Definition)} or a {nameof(State)}.");
-
-            IBlazorFormDataAccessor accessor = Model is not null
-                ? new BlazorFormModelDataAccessor(Model)
-                : new BlazorFormDictionaryDataAccessor(Data);
-
-            _built = new BlazorFormState(Definition, accessor, ServiceProvider);
-            Attach(_built);
+            ApplyReadOnly();
+            return;
         }
+
+        DisposeOwned();
+
+        IBlazorFormDataAccessor accessor = Model is not null
+            ? new BlazorFormModelDataAccessor(Model)
+            : new BlazorFormDictionaryDataAccessor(Data);
+
+        _owned = new BlazorFormState(Definition, accessor, ServiceProvider);
+        _builtFrom = Definition;
+        _builtModel = Model;
+        _builtData = Data;
+        Attach(_owned);
+        ApplyReadOnly();
+    }
+
+    // Pushed in both directions when the parameter is set, so toggling it off works; left alone when
+    // it is null, so a caller-supplied state can own the flag itself.
+    private void ApplyReadOnly()
+    {
+        if (ReadOnly is { } value) FormState.ReadOnly = value;
     }
 
     private void Attach(BlazorFormState state)
     {
         if (ReferenceEquals(FormState, state)) return;
-        if (FormState is not null) FormState.StateChanged -= OnStateChanged;
+        Detach();
         FormState = state;
         FormState.StateChanged += OnStateChanged;
+        FormState.FieldChanged += OnFieldChangedInternal;
+    }
+
+    private void Detach()
+    {
+        if (FormState is null) return;
+        FormState.StateChanged -= OnStateChanged;
+        FormState.FieldChanged -= OnFieldChangedInternal;
+    }
+
+    private void DisposeOwned()
+    {
+        if (_owned is null) return;
+        if (ReferenceEquals(FormState, _owned)) Detach();
+        _owned.Dispose();
+        _owned = null;
+        _builtFrom = null;
+        _builtModel = null;
+        _builtData = null;
     }
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
-    private async Task Next() => await FormState.NextStepAsync();
-
-    private async Task HandleSubmit()
+    private void OnFieldChangedInternal(string path)
     {
-        FormState.RegisterSubmitAttempt();
-        var valid = await FormState.ValidateAsync();
-        if (valid)
-            await OnValidSubmit.InvokeAsync(FormState);
-        else
-            await OnInvalidSubmit.InvokeAsync(FormState);
+        if (OnFieldChanged.HasDelegate) InvokeAsync(() => OnFieldChanged.InvokeAsync(path));
+    }
+
+    /// <summary>Accessible name of the stepper landmark. Defaults to the message provider's text.</summary>
+    [Parameter] public string? StepperLabel { get; set; }
+
+    private string StepperLabelText => StepperLabel ?? FormState.Text(BlazorFormMessageKeys.Progress);
+
+    /// <summary>
+    /// "Step 2 of 4", announced when the position changes. Counted over the visible steps, so a skipped
+    /// conditional step does not make the total jump around.
+    /// </summary>
+    private string StepAnnouncement
+        => FormState.Text(BlazorFormMessageKeys.StepOf, FormState.CurrentStepNumber, FormState.VisibleSteps.Count);
+
+    private string SubmitLabel => SubmitText ?? FormState.Text(BlazorFormMessageKeys.Submit);
+    private string ResetLabel => ResetText ?? FormState.Text(BlazorFormMessageKeys.Reset);
+    private string BackLabel => BackText ?? FormState.Text(BlazorFormMessageKeys.Back);
+    private string NextLabel => NextText ?? FormState.Text(BlazorFormMessageKeys.Next);
+
+    private ElementReference _stepBody;
+    private bool _focusStepBody;
+    private bool _focusStepErrors;
+
+    private async Task Next()
+    {
+        var moved = await FormState.NextStepAsync();
+        // Advancing means new content; staying put means the step has errors worth being taken to.
+        if (moved) _focusStepBody = true;
+        else _focusStepErrors = true;
+    }
+
+    private void Previous()
+    {
+        FormState.PreviousStep();
+        _focusStepBody = true;
+    }
+
+    /// <summary>Restores the values the form started with. Same as <c>Form.Reset()</c>.</summary>
+    public void Reset() => FormState.Reset();
+
+    /// <summary>
+    /// Runs the same submit cycle the built-in button does — validate, then raise
+    /// <see cref="OnValidSubmit"/> or <see cref="OnInvalidSubmit"/>. Call it from a custom
+    /// <see cref="Actions"/> row, or from a button somewhere else on the page, so replacing the button
+    /// does not mean reimplementing the pipeline behind it.
+    /// </summary>
+    public Task<bool> SubmitAsync() => HandleSubmit();
+
+    private async Task<bool> HandleSubmit()
+    {
+        var valid = await FormState.SubmitAsync(
+            onValid: state => OnValidSubmit.InvokeAsync(state),
+            onInvalid: state => OnInvalidSubmit.InvokeAsync(state));
+
+        if (!valid) _focusErrorForSubmit = FormState.SubmitCount;
+        return valid;
+    }
+
+    private int _focusErrorForSubmit;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusStepBody)
+        {
+            _focusStepBody = false;
+            await FocusStepBody();
+            return;
+        }
+
+        var wantsErrorFocus = _focusStepErrors || _focusErrorForSubmit != 0;
+        _focusStepErrors = false;
+        _focusErrorForSubmit = 0;
+
+        // The summary owns focus when it is showing; two components pulling at it would be a race.
+        if (!wantsErrorFocus || !FocusFirstError || ShowErrorSummary) return;
+
+        await FocusFirstErrorField();
+    }
+
+    private async Task FocusStepBody()
+    {
+        try
+        {
+            await _stepBody.FocusAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JSDisconnectedException or ObjectDisposedException)
+        {
+            // Static prerender: nothing to focus, and nothing to fix either.
+        }
+    }
+
+    /// <summary>
+    /// Focuses the first field reporting an error, walking the list until one actually accepts focus —
+    /// the first offender may be on a step that is not showing, or be a control with no focusable
+    /// element of its own.
+    /// </summary>
+    private async Task FocusFirstErrorField()
+    {
+        foreach (var message in FormState.OrderedMessages())
+        {
+            if (message.Severity != BlazorFormValidationSeverity.Error) continue;
+            if (string.IsNullOrEmpty(message.FieldPath)) continue;
+            if (await FormState.FocusAsync(message.FieldPath)) return;
+        }
     }
 
     public void Dispose()
     {
-        if (FormState is not null) FormState.StateChanged -= OnStateChanged;
+        Detach();
+        _owned?.Dispose();
+        _owned = null;
     }
 }

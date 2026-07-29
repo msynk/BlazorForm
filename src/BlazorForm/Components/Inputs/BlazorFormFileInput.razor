@@ -1,0 +1,74 @@
+@namespace BlazorForm
+@inherits BlazorFormInputBase
+@using Microsoft.AspNetCore.Components.Forms
+
+<div class="ff-file">
+    <InputFile id="@Context.ElementId"
+               class="@CssClass"
+               multiple="@Field.Multiple"
+               accept="@Field.Accept"
+               disabled="@DisabledOrReadOnly"
+               aria-required="@AriaRequired"
+               aria-invalid="@AriaInvalid"
+               aria-label="@AriaLabel"
+               aria-describedby="@DescribedBy"
+               OnChange="OnFilesSelected" />
+
+    @if (SelectedFiles.Count > 0)
+    {
+        <ul class="ff-file__list">
+            @foreach (var file in SelectedFiles)
+            {
+                <li class="ff-file__item">
+                    <span class="ff-file__name">@file.Name</span>
+                    <span class="ff-file__size">@FormatSize(file.Size)</span>
+                </li>
+            }
+        </ul>
+        @if (!DisabledOrReadOnly)
+        {
+            <button type="button" class="ff-btn ff-btn--danger ff-btn--sm" @onclick="Clear">
+                @Context.Text(BlazorFormMessageKeys.FileClear)
+            </button>
+        }
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The files currently held by the field. A single-file field stores one <see cref="IBrowserFile"/>
+    /// and a multiple-file field a list, so both shapes are normalised here for display.
+    /// </summary>
+    private IReadOnlyList<IBrowserFile> SelectedFiles => Context.Value switch
+    {
+        IBrowserFile single => [single],
+        IEnumerable<IBrowserFile> many => many.ToList(),
+        _ => Array.Empty<IBrowserFile>()
+    };
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        // Browsers hand back the whole selection; the rules on the field decide what is acceptable, so
+        // no cap is imposed here beyond what the user actually picked.
+        object? value = Field.Multiple
+            ? e.GetMultipleFiles(e.FileCount).ToList()
+            : e.FileCount > 0 ? e.File : null;
+
+        await Context.SetValueAsync(value);
+    }
+
+    private Task Clear() => Context.SetValueAsync(null);
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return $"{size:0.#} {units[unit]}";
+    }
+}
