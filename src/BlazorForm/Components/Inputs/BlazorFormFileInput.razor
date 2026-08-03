@@ -2,7 +2,12 @@
 @inherits BlazorFormInputBase
 @using Microsoft.AspNetCore.Components.Forms
 
-<div class="ff-file">
+@* tabindex="-1" so "take me to the first error" has somewhere to land, exactly as the radio and
+   multi-select groups do. <InputFile> is a component rather than an element, so there is no
+   ElementReference to bind to the control itself — and without one this was the single field type
+   the error summary's link and FocusFirstError silently walked past, on a form whose only problem
+   was a missing file. Focus lands on the wrapper, which carries the field's description. *@
+<div class="ff-file" @ref="Element" tabindex="-1" aria-describedby="@DescribedBy">
     @* Splat first so the renderer's own id and ARIA wiring below always wins. *@
     <InputFile @attributes="ExtraAttributes"
                id="@Context.ElementId"

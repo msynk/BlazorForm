@@ -5,7 +5,11 @@
     @* A summary at the top of the form is the standard way to make a long form's errors reachable:
        it is announced when it appears, takes focus after a failed submit, and each entry links
        straight to the control that needs fixing. *@
-    <div class="ff-summary" role="alert" tabindex="-1" @ref="_element">
+    @* role="alert" only when the summary does not take focus itself. Moving focus to a live region
+       makes a screen reader announce it twice — once because the region changed and once because
+       focus arrived — and some read it more than that. Focus alone already reads the summary out, so
+       the role is what has to go; with AutoFocus off, nothing else would say anything, so it stays. *@
+    <div class="ff-summary" role="@(AutoFocus ? null : "alert")" tabindex="-1" @ref="_element">
         <p class="ff-summary__title">@(Title ?? DefaultTitle)</p>
         <ul class="ff-summary__list">
             @foreach (var message in Messages)
@@ -86,7 +90,12 @@
     private string Describe(BlazorFormValidationMessage message)
     {
         if (!ShowFieldNames) return message.Message;
-        var label = State.Definition.FindByPath(message.FieldPath)?.Label;
+
+        var field = State.Definition.FindByPath(message.FieldPath);
+        // A hand-built schema need not label every field, and "This field is required." on its own
+        // names nothing — which is the one thing a summary entry exists to do. The field's name is a
+        // worse title than a label and a far better one than no title at all.
+        var label = string.IsNullOrEmpty(field?.Label) ? field?.Name : field.Label;
         if (string.IsNullOrEmpty(label)) return message.Message;
 
         // Every row of a repeater shares one field definition, so five identical "Product is required"

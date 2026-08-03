@@ -11,6 +11,7 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 - **Field polish** – prefix/suffix affixes, live character counters, `<datalist>` suggestions, a password reveal toggle, a clear button, and arbitrary HTML attributes splatted onto any control.
 - **Live updates** – write on every keystroke instead of on blur, with optional debouncing, for as-you-type previews and validation.
 - **Validation** – built-in rules (required, length, range, pattern, email, URL, compare, multiple-of, unique items, collection size, file size/type), custom sync/async rules, form-level cross-field rules, and optional [FluentValidation](https://docs.fluentvalidation.net/) integration.
+- **Dependent revalidation** – `RevalidateOn(...)` runs a field's rules again when the *other* field they read changes, so fixing the password clears the confirmation's error instead of leaving it stranded.
 - **Validation modes** – choose when fields revalidate before and after the first submit (`OnSubmit` / `OnBlur` / `OnChange`).
 - **Conditional behaviour** – show/hide, disable, or conditionally require fields and wizard steps based on other values, and clear hidden values so abandoned branches never reach your model.
 - **Async & cascading options** – load select options from a service and reload them when a dependency changes.
@@ -179,6 +180,7 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 | `x-step` | The control's granularity, as distinct from a `multipleOf` constraint. |
 | `x-accept`, `x-multiple`, `x-maxFileSize` | File upload constraints. |
 | `x-visibleWhen`, `x-disabledWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. |
+| `x-revalidateOn` | Paths whose change revalidates this field — the other half of a cross-field rule. |
 | `x-clearOnHide` | Clear the value when the field is hidden. |
 | `x-attributes`, `x-inputAttributes` | Renderer hints and extra HTML attributes. |
 | `x-steps` | Wizard steps, each with `id`, `title`, `fields` and an optional `visibleWhen`. |
@@ -217,6 +219,30 @@ Custom, async and cross-field rules:
 ```
 
 Async rules are skipped while the user types and run on blur and on submit.
+
+### Rules that read another field
+
+A cross-field rule lives on one of the two fields it compares, so only one of the two changes ever
+runs it. Get the confirmation wrong, then fix the *password* to agree with what you typed, and the
+complaint under the confirmation box is now false — and stays there until you go back and touch a
+field that was already right. `RevalidateOn` closes that:
+
+```csharp
+.Field(x => x.End, f => f
+    .RevalidateOn(nameof(Booking.Start))
+    .Must(ctx => …, "End must be on or after start."))
+```
+
+`MatchesField(...)` and `[Compare]` register their own dependency, so a confirm-password field needs
+nothing extra. Paths resolve against the object that owns the field before falling back to the root,
+exactly as conditions and computed dependencies do, so a rule on a repeater's item template means
+*that row*; naming a container covers everything inside it.
+
+A dependent that has nothing to say is left alone — a field the user has never visited on a form
+nobody has submitted does not start showing errors because a different field changed. The point is to
+correct a verdict already on screen, never to bring one forward. React Hook Form spells this `deps`;
+TanStack Form spells it `onChangeListenTo`. `Definition.Validate()` reports a comparison rule that
+never revalidates.
 
 Rules can also be scoped to a condition, the way FluentValidation's `.When(…)` works:
 
@@ -364,6 +390,11 @@ var state = new BlazorFormState(definition, new BlazorFormModelDataAccessor(mode
 
 If your validators are registered in DI, call `state.UseFluentValidation()` (no argument) and the
 matching `IValidator<TModel>` is resolved from the service provider.
+
+`UseFluentValidation()` and `UseDataAnnotations()` compose, so a model that carries both a validator
+and its own `IValidatableObject` can use both — a complaint they report identically on the same field
+is still read once. `BlazorFormExternalValidator.CombineWith(...)` does the same for a hand-written
+external validator.
 
 ## Conditional fields and wizards
 
@@ -689,6 +720,7 @@ When you let the view build its own state from `Definition`, capture the compone
 | `GetFieldState(path)` | Touched, dirty, invalid, the first error and every message for one field, in a single read. |
 | `SubmitAsync` | Marks everything touched, validates, and dispatches — ignoring re-entrant calls. |
 | `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. `ValidateFieldAsync(path)` resolves the field from the schema for you. |
+| `ValidateDependentsAsync(path)` | Revalidates every field that declared `RevalidateOn(path)`. The built-in controls call it for you; this is the hook for a custom one. |
 | `SingleErrorPerField` | Show a field's first error rather than every rule it breaks. Every rule still runs. |
 | `MessagesFor`, `AllMessages`, `OrderedMessages`, `SetServerError(s)` | Validation messages. |
 | `Reset()` / `Reset(values)` / `AcceptChanges` | Restore the starting values, rebase onto new ones, or make the current ones the new baseline. |

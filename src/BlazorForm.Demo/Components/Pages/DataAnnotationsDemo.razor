@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @using BlazorForm.Demo.Forms
+@using FluentValidation
 
 <PageTitle>DataAnnotations &amp; IValidatableObject</PageTitle>
 
@@ -13,7 +14,10 @@
         express is a rule that reads more than one property — check out after check in, guests within
         the room's capacity — and in .NET that is <code>IValidatableObject</code>.
         <code>UseDataAnnotations()</code> runs it, exactly as <code>UseFluentValidation()</code> runs a
-        FluentValidation validator.
+        FluentValidation validator — and the two <em>compose</em>, so a model that carries both gets
+        both. The rule below about a reference for large bookings is a FluentValidation rule sitting
+        alongside the model's own; a complaint the two layers would word identically on the same field
+        is still read once.
     </p>
 </div>
 
@@ -67,7 +71,18 @@ public class RoomBooking : IValidatableObject
 // somewhere that never saw them (a JSON Schema document rendered over a typed model).
 var state = new BlazorFormState(BlazorFormSchemaGenerator.Generate<RoomBooking>(),
                                 new BlazorFormModelDataAccessor(model))
-    .UseDataAnnotations();
+    // The two integrations combine rather than replace each other, so a model whose rules are split
+    // across both layers gets both. Either order works.
+    .UseDataAnnotations()
+    .UseFluentValidation(new RoomBookingValidator());
+
+public sealed class RoomBookingValidator : AbstractValidator<RoomBooking>
+{
+    public RoomBookingValidator()
+        => RuleFor(x => x.GuestName)
+            .Must(name => !name.Contains("  "))
+            .WithMessage("Please use single spaces in the guest's name.");
+}
 """;
 
     private readonly RoomBooking _model = new();
@@ -90,7 +105,9 @@ var state = new BlazorFormState(BlazorFormSchemaGenerator.Generate<RoomBooking>(
             .Field(x => x.Guests, f => f.Help("Try more guests than the room sleeps."))
             .Build();
 
-        _state = new BlazorFormState(schema, new BlazorFormModelDataAccessor(_model)).UseDataAnnotations();
+        _state = new BlazorFormState(schema, new BlazorFormModelDataAccessor(_model))
+            .UseDataAnnotations()
+            .UseFluentValidation(new RoomBookingValidator());
         _state.StateChanged += OnStateChanged;
     }
 
@@ -104,4 +121,16 @@ var state = new BlazorFormState(BlazorFormSchemaGenerator.Generate<RoomBooking>(
     }
 
     public void Dispose() => _state.StateChanged -= OnStateChanged;
+
+    /// <summary>
+    /// A FluentValidation rule sitting alongside the model's own IValidatableObject, to show the two
+    /// integrations composing rather than the second one quietly replacing the first.
+    /// </summary>
+    private sealed class RoomBookingValidator : AbstractValidator<RoomBooking>
+    {
+        public RoomBookingValidator()
+            => RuleFor(x => x.GuestName)
+                .Must(name => !name.Contains("  ", StringComparison.Ordinal))
+                .WithMessage("Please use single spaces in the guest's name.");
+    }
 }

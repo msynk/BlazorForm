@@ -21,12 +21,14 @@ public static class BlazorFormFluentValidationIntegration
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(validator);
 
-        state.ExternalValidator = (_, data, _) =>
+        // Combined rather than assigned: a form has one external-validator slot, and calling this
+        // alongside UseDataAnnotations() used to mean whichever came second silently won.
+        state.ExternalValidator = state.ExternalValidator.CombineWith((_, data, _) =>
         {
             if (data.Root is not TModel model)
                 return new ValueTask<IReadOnlyList<BlazorFormValidationMessage>>(Array.Empty<BlazorFormValidationMessage>());
             return RunAsync(validator, new global::FluentValidation.ValidationContext<TModel>(model));
-        };
+        });
         return state;
     }
 
@@ -45,7 +47,7 @@ public static class BlazorFormFluentValidationIntegration
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        state.ExternalValidator = async (form, data, services) =>
+        state.ExternalValidator = state.ExternalValidator.CombineWith(async (form, data, services) =>
         {
             if (data.Root is null || services is null)
                 return Array.Empty<BlazorFormValidationMessage>();
@@ -64,7 +66,7 @@ public static class BlazorFormFluentValidationIntegration
 
             var result = await validator.ValidateAsync(new FvContext(data.Root));
             return Map(result);
-        };
+        });
         return state;
     }
 

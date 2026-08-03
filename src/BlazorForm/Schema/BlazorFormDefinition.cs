@@ -152,6 +152,7 @@ public sealed class BlazorFormDefinition
                 Suggestions = new List<string>(field.Suggestions),
                 Computed = field.Computed,
                 ComputedDependencies = new List<string>(field.ComputedDependencies),
+                RevalidateOn = new List<string>(field.RevalidateOn),
                 OnChanged = field.OnChanged,
                 MinLength = field.MinLength,
                 MaxLength = field.MaxLength,
@@ -322,6 +323,20 @@ public sealed class BlazorFormDefinition
             CheckPaths(field.RequiredWhen?.Dependencies, path, "RequiredWhen", into);
             CheckPaths(field.ComputedDependencies, path, "a computed dependency", into);
             CheckPaths(field.OptionsDependencies, path, "an options dependency", into);
+            CheckPaths(field.RevalidateOn, path, "RevalidateOn", into);
+
+            // A field that reads another one and never revalidates keeps a verdict that has since
+            // become wrong: the user is told the two do not match, fixes the *other* field, and the
+            // message stays. MatchesField wires itself up, so this only catches a hand-built rule.
+            foreach (var compare in field.Validators.OfType<BlazorFormCompareRule>())
+            {
+                if (DeclaresRevalidation(field, compare.OtherPath)) continue;
+                into.Add(new BlazorFormSchemaDiagnostic(path,
+                    $"A rule compares this field with '{compare.OtherPath}' but does not revalidate when it changes, " +
+                    "so correcting the other field leaves this one's message behind. Add RevalidateOn(\"" +
+                    compare.OtherPath + "\").",
+                    BlazorFormSchemaDiagnosticSeverity.Warning));
+            }
 
             seen.Add(path);
 
@@ -347,10 +362,17 @@ public sealed class BlazorFormDefinition
             }
         }
 
-        /// <summary>
-        /// Whether a control writes its value while the user is still working on it. A slider is here
-        /// because dragging <em>is</em> the interaction: it always writes live, whatever the schema says.
-        /// </summary>
+        // Whether the field already says it revalidates when `other` changes. Matched by prefix, so
+        // naming a container covers the field inside it, exactly as the runtime match does.
+        static bool DeclaresRevalidation(BlazorFormFieldDefinition field, string other)
+        {
+            foreach (var declared in field.RevalidateOn)
+                if (declared.Length > 0 && BlazorFormPath.IsAtOrUnder(other, declared)) return true;
+            return false;
+        }
+
+        // Whether a control writes its value while the user is still working on it. A slider is here
+        // because dragging *is* the interaction: it always writes live, whatever the schema says.
         static bool TypesThatWriteAsYouType(BlazorFormFieldType type) => type is
             BlazorFormFieldType.Text or BlazorFormFieldType.TextArea or BlazorFormFieldType.Email
             or BlazorFormFieldType.Password or BlazorFormFieldType.Url or BlazorFormFieldType.Tel

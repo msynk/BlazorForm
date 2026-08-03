@@ -98,6 +98,28 @@ public sealed class BlazorFormFieldDefinition
     public IList<string> ComputedDependencies { get; set; } = new List<string>();
 
     /// <summary>
+    /// Other field paths whose value this field's rules read, so that changing one of them revalidates
+    /// this field. The "confirm password" case: the rule lives on the confirmation box and reads the
+    /// password, so fixing the <em>password</em> is what makes the confirmation's error wrong — and
+    /// nothing was revalidating it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Paths resolve relative to the object that owns the field before falling back to the root,
+    /// exactly as conditions, computed dependencies and cascading options do, so a rule on a repeater's
+    /// item template can name its sibling and mean <em>that row</em>. Naming a container covers
+    /// everything inside it.
+    /// </para>
+    /// <para>
+    /// A dependent is only revalidated once it has something to say: a field the user has never visited
+    /// on a form that has never been submitted is left alone, so typing a password does not light up a
+    /// confirmation box nobody has reached yet. React Hook Form spells this <c>deps</c>; TanStack Form
+    /// spells it <c>onChangeListenTo</c>.
+    /// </para>
+    /// </remarks>
+    public IList<string> RevalidateOn { get; set; } = new List<string>();
+
+    /// <summary>
     /// Runs when this field's value changes — "when the country changes, clear the city". Not the same
     /// thing as <see cref="Computed"/>: a computed field owns its value and overwrites whatever is
     /// there, while a handler writes a value the user is then free to change.

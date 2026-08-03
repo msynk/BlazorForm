@@ -145,13 +145,35 @@ public class FocusTests : BunitContext
     public async Task A_control_with_no_focusable_element_reports_that_it_could_not_take_focus()
     {
         // Reporting success while doing nothing would make "focus the first error" stop at the first
-        // field it cannot reach, instead of moving on to one it can.
-        var form = BlazorFormBuilder.Create().File("cv").Build();
+        // field it cannot reach, instead of moving on to one it can. A field on a wizard step that is
+        // not showing is not rendering anything, so there is nothing to focus.
+        var form = BlazorFormBuilder.Create()
+            .Text("name")
+            .Text("notes")
+            .Step("one", s => s.Title("One").Fields("name"))
+            .Step("two", s => s.Title("Two").Fields("notes"))
+            .Build();
         var state = new BlazorFormState(form, new BlazorFormDictionaryDataAccessor());
 
         Render<BlazorFormView>(p => p.Add(x => x.State, state));
 
-        Assert.False(await state.FocusAsync("cv"));
+        Assert.True(await state.FocusAsync("name"));
+        Assert.False(await state.FocusAsync("notes"));
+    }
+
+    [Fact]
+    public async Task A_file_field_offers_its_group_as_the_focus_target()
+    {
+        // <InputFile> is a component, not an element, so there is no ElementReference for the control
+        // itself — which used to make a required file the one field "go to the first error" and the
+        // error summary's link silently walked past, on a form whose only problem was that file.
+        var form = BlazorFormBuilder.Create().File("cv", f => f.Required()).Build();
+        var state = new BlazorFormState(form, new BlazorFormDictionaryDataAccessor());
+
+        var cut = Render<BlazorFormView>(p => p.Add(x => x.State, state));
+
+        Assert.Equal("-1", cut.Find(".ff-file").GetAttribute("tabindex"));
+        Assert.True(await state.FocusAsync("cv"));
     }
 
     [Fact]

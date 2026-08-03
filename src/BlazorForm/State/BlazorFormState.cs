@@ -24,6 +24,7 @@ public sealed class BlazorFormState : IDisposable
     private readonly bool _hasClearOnHide;
     private readonly bool _hasComputed;
     private readonly bool _hasChangeHandlers;
+    private readonly bool _hasRevalidateOn;
 
     // Handlers write values, and those writes are changes too. Bounded so a pair that answer each other
     // settles rather than recursing, exactly as a cycle of computed formulas does.
@@ -46,6 +47,7 @@ public sealed class BlazorFormState : IDisposable
         _hasClearOnHide = definition.AllFields().Any(f => f.ClearOnHide);
         _hasComputed = definition.AllFields().Any(f => f.Computed is not null);
         _hasChangeHandlers = definition.AllFields().Any(f => f.OnChanged is not null);
+        _hasRevalidateOn = definition.AllFields().Any(f => f.RevalidateOn.Count > 0);
 
         ApplyDefaults();
         SeedRequiredArrayItems();
@@ -450,17 +452,26 @@ public sealed class BlazorFormState : IDisposable
     }
 
     /// <summary>
-    /// Whether a value equals the one captured as the baseline. Array baselines are snapshots of the
-    /// elements, so a row added and then removed again leaves the list clean.
+    /// Whether a value equals the one captured as the baseline. A collection's baseline is a snapshot
+    /// of its elements, so a repeater row added and then removed again — and a multi-select box
+    /// unticked and ticked again — leave the form clean.
     /// </summary>
     private static bool MatchesInitial(object? initial, object? current)
     {
         if (initial is List<object?> snapshot)
         {
-            if (current is not IList live || live.Count != snapshot.Count) return false;
-            for (var i = 0; i < snapshot.Count; i++)
-                if (!Equals(snapshot[i], live[i])) return false;
-            return true;
+            // Nothing there and nothing expected is a match. A control that writes a fresh empty list
+            // where the model held null has not changed the user's answer.
+            if (current is null) return snapshot.Count == 0;
+            if (current is string || current is not IEnumerable live) return false;
+
+            var i = 0;
+            foreach (var item in live)
+            {
+                if (i >= snapshot.Count || !Equals(snapshot[i], item)) return false;
+                i++;
+            }
+            return i == snapshot.Count;
         }
 
         if (ReferenceEquals(initial, current)) return true;
@@ -538,6 +549,7 @@ public sealed class BlazorFormState : IDisposable
         if (!_hasClearOnHide) return;
 
         // Materialised: clearing a hidden container changes the live array counts the walk reads.
+        List<string>? cleared = null;
         foreach (var (field, path) in EnumerateFieldPaths().ToList())
         {
             if (!field.ClearOnHide || field.VisibleWhen is null) continue;
@@ -551,6 +563,24 @@ public sealed class BlazorFormState : IDisposable
             // Emptying a field is a change to the data like any other, so the form is now dirty even
             // though the user never typed in this box.
             TrackDirty(path);
+            (cleared ??= []).Add(path);
+        }
+
+        // …and being a change like any other means the rest of the engine has to hear about it. The
+        // sweeps run after the loop, not inside it, because they re-enter this method: a cleared value
+        // can hide a second field, and that one is cleared by the recursive call rather than by a walk
+        // whose list is already stale. Emptied for the user by a condition or emptied by the user
+        // themselves, a total that reads this field must be recomputed, a select that cascades off it
+        // must reload, and an autosave watching FieldChanged has to see it go.
+        if (cleared is null) return;
+        foreach (var path in cleared)
+        {
+            // Re-entrant, and it terminates: a field is only cleared while it still holds something,
+            // so a chain of conditions settles at the first one that has nothing left to empty.
+            ClearHiddenValues(path);
+            RecomputeValues(path);
+            InvalidateDependentOptions(path);
+            FieldChanged?.Invoke(path);
         }
     }
 
@@ -847,8 +877,12 @@ public sealed class BlazorFormState : IDisposable
             if (ExternalValidator is not null)
             {
                 var external = await ExternalValidator(Definition, Data, Services);
-                messages.AddRange(external.Where(m =>
-                    step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(m.FieldPath, f)) && !IsHidden(m.FieldPath)));
+                if (external.Count > 0)
+                {
+                    var hidden = HiddenFieldPaths();
+                    messages.AddRange(external.Where(m =>
+                        step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(m.FieldPath, f)) && !IsHidden(m.FieldPath, hidden)));
+                }
             }
 
             cts.Token.ThrowIfCancellationRequested();
@@ -943,6 +977,49 @@ public sealed class BlazorFormState : IDisposable
                 cts.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Revalidates every field that declared <paramref name="changedPath"/> in its
+    /// <see cref="BlazorFormFieldDefinition.RevalidateOn"/> list — the other half of a cross-field rule.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A rule that reads two values lives on one of them, so only one of the two changes ever runs it.
+    /// The confirm-password case is the whole story: the user mistypes the confirmation and is told the
+    /// two do not match, then fixes the <em>password</em> to agree with what they typed — and the
+    /// message under the confirmation box is now wrong, and stays wrong, because nothing revalidated a
+    /// field the user did not touch. React Hook Form's <c>deps</c> and TanStack Form's
+    /// <c>onChangeListenTo</c> exist for exactly this.
+    /// </para>
+    /// <para>
+    /// A dependent that has nothing to say is left alone: a field the user has never visited on a form
+    /// that has never been submitted must not start showing errors because a different field changed.
+    /// The point is to correct a verdict already on screen, not to bring forward one that is not.
+    /// </para>
+    /// </remarks>
+    public async ValueTask ValidateDependentsAsync(string changedPath, bool includeAsync = false)
+    {
+        if (!_hasRevalidateOn || string.IsNullOrEmpty(changedPath)) return;
+
+        // Materialised before the loop: validating writes messages, and a rule is free to read the
+        // live arrays the walk is enumerating.
+        List<(BlazorFormFieldDefinition Field, string Path)>? dependents = null;
+        foreach (var (field, path) in EnumerateFieldPaths())
+        {
+            if (field.RevalidateOn.Count == 0) continue;
+            // A field is never its own dependent; its own write already validated it.
+            if (string.Equals(path, changedPath, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!DeclaresPath(field.RevalidateOn, changedPath, BlazorFormPath.Parent(path))) continue;
+            // Nothing is currently being claimed about this field, so there is nothing to correct.
+            if (!IsSubmitted && !IsTouched(path) && MessagesFor(path).Count == 0) continue;
+
+            (dependents ??= []).Add((field, path));
+        }
+
+        if (dependents is null) return;
+        foreach (var (field, path) in dependents)
+            await ValidateFieldAsync(field, path, includeAsync);
     }
 
     /// <summary>
@@ -1198,18 +1275,36 @@ public sealed class BlazorFormState : IDisposable
         foreach (var key in _conversionErrors.Keys.Where(k => BlazorFormPath.IsAtOrUnder(k, path)).ToList())
             _conversionErrors.Remove(key);
 
+        // Putting one answer back is a change to the form, so it runs the same sweeps a typed-in value
+        // does. Without them, undoing the country left the city's options loaded for the country the
+        // user had just abandoned, a branch this answer was keeping open stayed open, and nothing
+        // watching FieldChanged — an autosave, a live preview — heard about it at all.
+        ClearHiddenValues(path);
         RecomputeValues(path);
+        InvalidateDependentOptions(path);
+        ClampStep();
+        FieldChanged?.Invoke(path);
         NotifyChanged();
     }
 
-    /// <summary>Puts a single captured baseline back, restoring array contents element by element.</summary>
+    /// <summary>Puts a single captured baseline back, restoring collection contents element by element.</summary>
     private void RestoreInitial(string path, object? initial)
     {
         if (initial is List<object?> snapshot)
         {
-            if (Data.GetValue(path) is not IList live) return;
-            live.Clear();
-            foreach (var item in snapshot) live.Add(item);
+            // Refilling the live list in place keeps the model's own collection instance, which
+            // anything else holding a reference to it is relying on.
+            if (Data.GetValue(path) is IList live)
+            {
+                live.Clear();
+                foreach (var item in snapshot) live.Add(item);
+                return;
+            }
+
+            // No live collection to refill — a multi-select the user emptied, or a property left null.
+            // Writing the snapshot lets the accessor build one of the model's own element type;
+            // returning here instead is how a reset used to leave the old values in place.
+            Data.SetValue(path, snapshot.Count == 0 ? null : new List<object?>(snapshot));
             return;
         }
         Data.SetValue(path, initial);
@@ -1231,17 +1326,39 @@ public sealed class BlazorFormState : IDisposable
     {
         foreach (var (field, path) in EnumerateFieldPaths())
         {
-            if (field.IsPresentational) continue;
+            if (field.IsPresentational || field.Type == BlazorFormFieldType.Object) continue;
 
-            if (field.Type == BlazorFormFieldType.Array)
-            {
-                _initialValues[path] = Data.GetValue(path) is IList list ? list.Cast<object?>().ToList() : new List<object?>();
-            }
-            else if (field.Type != BlazorFormFieldType.Object)
-            {
-                _initialValues[path] = Data.GetValue(path);
-            }
+            var value = Data.GetValue(path);
+            _initialValues[path] = HoldsManyValues(field, value)
+                ? value is IEnumerable items and not string ? items.Cast<object?>().ToList() : new List<object?>()
+                : value;
         }
+    }
+
+    /// <summary>
+    /// Whether a field's baseline has to be a snapshot of its elements rather than the value itself.
+    /// </summary>
+    /// <remarks>
+    /// A control that holds several values writes a brand-new collection every time one of them is
+    /// toggled — a multi-select and a tag list both do — so keeping the reference as the baseline
+    /// reports the field dirty from the first click and never clean again, whatever the user does. An
+    /// "undo" button, an unsaved-changes prompt and a disabled save button all read that.
+    /// </remarks>
+    private static bool HoldsManyValues(BlazorFormFieldDefinition field, object? value)
+    {
+        // What is actually there is the most reliable evidence there is.
+        if (value is IEnumerable and not string) return true;
+        if (value is not null) return false;
+
+        // Nothing there yet, so go by the declared shape — otherwise a multi-select that opens empty
+        // would baseline as null and never compare equal to the empty list the control writes back.
+        if (field.Type is not (BlazorFormFieldType.Array or BlazorFormFieldType.Tags or BlazorFormFieldType.MultiSelect))
+            return false;
+
+        // A [Flags] multi-select is the exception: it renders as a set of boxes but stores one
+        // combined value, which compares perfectly well as itself.
+        var declared = field.ValueType is { } t ? Nullable.GetUnderlyingType(t) ?? t : null;
+        return declared is null || !declared.IsEnum;
     }
 
     // ---------------------------------------------------------------- wizard
@@ -1664,25 +1781,44 @@ public sealed class BlazorFormState : IDisposable
     {
         if (ExternalValidator is null) return messages;
         var external = await ExternalValidator(Definition, Data, Services);
-        return messages.Concat(external.Where(m => !IsHidden(m.FieldPath))).ToList();
+        if (external.Count == 0) return messages;
+
+        // The hidden set is computed once for the batch rather than once per message. Asking per
+        // message walks every field path and evaluates every condition again, so a validator reporting
+        // fifty failures across a two-hundred-field schema did ten thousand condition evaluations to
+        // answer a question whose answer had not changed since the first one.
+        var hidden = HiddenFieldPaths();
+        return hidden.Count == 0
+            ? messages.Concat(external).ToList()
+            : messages.Concat(external.Where(m => !IsHidden(m.FieldPath, hidden))).ToList();
     }
 
     /// <summary>
-    /// Whether a path lies under a field the schema is currently hiding. An external validator — a
-    /// FluentValidation validator, say — sees the whole model and knows nothing about the form's
-    /// conditions, so a rule on a branch the user was never shown would otherwise block submission with
-    /// an error on a control that is not on the page.
+    /// Every field path the schema is currently hiding. An external validator — a FluentValidation
+    /// validator, say — sees the whole model and knows nothing about the form's conditions, so a rule
+    /// on a branch the user was never shown would otherwise block submission with an error on a control
+    /// that is not on the page.
     /// </summary>
-    private bool IsHidden(string path)
+    private List<string> HiddenFieldPaths()
     {
-        if (string.IsNullOrEmpty(path)) return false;
-
+        var hidden = new List<string>();
         foreach (var (field, fieldPath) in EnumerateFieldPaths())
         {
             if (field.VisibleWhen is null) continue;
-            if (!BlazorFormPath.IsAtOrUnder(path, fieldPath)) continue;
-            if (!field.VisibleWhen.Evaluate(ScopeFor(fieldPath))) return true;
+            // Already inside a hidden branch: its own condition cannot make it visible again, and
+            // testing it would be one condition evaluation per descendant of every hidden container.
+            if (IsHidden(fieldPath, hidden)) continue;
+            if (!field.VisibleWhen.Evaluate(ScopeFor(fieldPath))) hidden.Add(fieldPath);
         }
+        return hidden;
+    }
+
+    /// <summary>Whether a path lies at or under one of the currently hidden fields.</summary>
+    private static bool IsHidden(string path, List<string> hidden)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        for (var i = 0; i < hidden.Count; i++)
+            if (BlazorFormPath.IsAtOrUnder(path, hidden[i])) return true;
         return false;
     }
 

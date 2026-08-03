@@ -207,7 +207,51 @@ public class ValidationRenderingTests : ComponentTestBase
         Assert.Equal("#ff_first", links[0].GetAttribute("href"));
         Assert.Contains("First:", links[0].TextContent, StringComparison.Ordinal);
         Assert.Equal("#ff_second", links[1].GetAttribute("href"));
+
+        // The summary takes focus itself, so it must NOT also be a live region: a screen reader would
+        // announce it once for the region changing and again for focus arriving.
+        Assert.Null(cut.Find(".ff-summary").GetAttribute("role"));
+        Assert.Equal("-1", cut.Find(".ff-summary").GetAttribute("tabindex"));
+    }
+
+    [Fact]
+    public async Task The_error_summary_announces_itself_when_it_does_not_take_focus()
+    {
+        var form = BlazorFormBuilder.Create()
+            .Text("first", f => f.Label("First").Required())
+            .Build();
+
+        var state = new BlazorFormState(form, new BlazorFormDictionaryDataAccessor());
+        var cut = Render<BlazorFormErrorSummary>(p => p
+            .Add(x => x.State, state)
+            .Add(x => x.AutoFocus, false));
+
+        await state.SubmitAsync();
+        cut.Render();
+
+        // Nothing else would tell the user anything, so here the live region is the announcement.
         Assert.Equal("alert", cut.Find(".ff-summary").GetAttribute("role"));
+    }
+
+    [Fact]
+    public async Task An_unlabelled_field_is_still_named_in_the_error_summary()
+    {
+        // A hand-built schema need not label every field; "This field is required." on its own names
+        // nothing, which is the one job a summary entry has. (The builders always humanise a label
+        // from the name, so an unlabelled field only arrives from a definition assembled by hand.)
+        var form = new BlazorFormDefinition
+        {
+            Fields = { new BlazorFormFieldDefinition("orderRef", BlazorFormFieldType.Text)
+                { Validators = { new BlazorFormRequiredRule() } } }
+        };
+
+        var cut = Render<BlazorFormView>(p => p
+            .Add(x => x.Definition, form)
+            .Add(x => x.ShowErrorSummary, true));
+
+        await cut.Find("form").SubmitAsync();
+
+        Assert.Contains("orderRef:", cut.Find(".ff-summary__list").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]

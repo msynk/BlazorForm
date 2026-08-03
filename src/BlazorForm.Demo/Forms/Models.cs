@@ -142,6 +142,42 @@ public class NewAccount
     public string Username { get; set; } = "";
 }
 
+/// <summary>
+/// Model for the dependent-fields demo. Every rule here reads a value from a <em>different</em> field,
+/// which is the case a form engine gets wrong by default: the rule runs when its own field changes and
+/// never again, so correcting the other one leaves the complaint on screen.
+/// </summary>
+public class TripRequest
+{
+    [Required, EmailAddress, Display(Name = "Email")]
+    public string Email { get; set; } = "";
+
+    [Required, EmailAddress, Display(Name = "Confirm email")]
+    [Compare(nameof(Email), ErrorMessage = "The two addresses do not match.")]
+    public string ConfirmEmail { get; set; } = "";
+
+    [Display(Name = "Leaving on")]
+    public DateOnly? Start { get; set; }
+
+    [Display(Name = "Coming back on")]
+    public DateOnly? End { get; set; }
+
+    [Display(Name = "Travellers")]
+    public int Travellers { get; set; } = 1;
+
+    [Display(Name = "Rooms booked")]
+    public int Rooms { get; set; } = 1;
+
+    [Display(Name = "Taking a hire car")]
+    public bool HireCar { get; set; }
+
+    [Display(Name = "Hire car days")]
+    public int? CarDays { get; set; }
+
+    [Display(Name = "Estimated cost")]
+    public decimal Estimate { get; set; }
+}
+
 /// <summary>Model for the field-polish demo: affixes, counters, live updates and static sections.</summary>
 public class ListingDraft
 {

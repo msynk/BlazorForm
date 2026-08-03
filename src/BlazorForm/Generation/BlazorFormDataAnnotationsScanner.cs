@@ -144,9 +144,15 @@ public static class BlazorFormDataAnnotationsScanner
 
         // [Compare] names a sibling property, which is exactly a form path at the same level.
         if (member.GetCustomAttribute<CompareAttribute>() is { } compare)
+        {
             field.AddValidator(new BlazorFormCompareRule(compare.OtherProperty,
                 compare.OtherPropertyDisplayName ?? BlazorFormFieldBuilder.Humanize(compare.OtherProperty),
                 NullIfDefault(compare.ErrorMessage)));
+            // The rule reads the other property, so correcting *that* one is what makes this field's
+            // message wrong — and nothing would revalidate it. Same wiring MatchesField does.
+            if (!field.RevalidateOn.Contains(compare.OtherProperty))
+                field.RevalidateOn.Add(compare.OtherProperty);
+        }
 
         // DataType hints
         if (member.GetCustomAttribute<DataTypeAttribute>() is { } dt)

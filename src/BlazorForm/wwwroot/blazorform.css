@@ -343,3 +343,22 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 @media (prefers-reduced-motion: reduce) {
     .ff-input, .ff-btn, .ff-switch, .ff-switch::after { transition: none; }
 }
+
+/* Windows High Contrast Mode replaces every author background colour with a system one, and the
+   switch is the single control here whose on/off state is drawn entirely in background: checked and
+   unchecked came out identical, so the state was conveyed by a colour the mode had just taken away.
+   Handing the checkbox its native rendering back is the honest fix — the affordance degrades to a
+   tick box exactly where custom painting cannot be trusted, and role="switch" still tells a screen
+   reader what it is. */
+@media (forced-colors: active) {
+    .ff-switch {
+        appearance: auto; -webkit-appearance: auto;
+        inline-size: auto; block-size: auto;
+        border-radius: 0; background: none;
+    }
+    .ff-switch::after { content: none; }
+
+    /* Borders survive forced colours where backgrounds do not, so the field that needs attention is
+       still distinguishable from the ones that do not. */
+    .ff-input--invalid, .ff-affixed--invalid, .ff-tags--invalid { border-style: dashed; border-width: 2px; }
+}

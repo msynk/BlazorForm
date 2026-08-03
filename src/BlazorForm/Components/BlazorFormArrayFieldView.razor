@@ -198,30 +198,41 @@
     private int? _focusRow;
     private bool _focusAdd;
 
-    private void Add()
+    private async Task Add()
     {
         var index = State.AddArrayItem(Field, Path);
         if (index >= 0) _focusRow = index;
+        await Dependents();
     }
+
+    /// <summary>
+    /// Revalidates whatever declared a dependency on this list. Adding a row changes the value the
+    /// field binds to as surely as typing does, so a rule elsewhere that counts the rows — "at least
+    /// one line per delivery" — has to be judged again; the input controls do this through the field
+    /// context, and a repeater has no context to go through.
+    /// </summary>
+    private ValueTask Dependents() => State.ValidateDependentsAsync(Path);
 
     /// <summary>
     /// Moves a row, ignoring a request that would take it past either end. The buttons at the ends are
     /// only <c>aria-disabled</c>, so they can still be pressed; this is where that is made harmless.
     /// The DOM node moves with the row (it is keyed by the item), so focus follows it without help.
     /// </summary>
-    private void Move(int from, int to)
+    private async Task Move(int from, int to)
     {
         if (to < 0 || to >= Count) return;
         State.MoveArrayItem(Path, from, to);
+        await Dependents();
     }
 
-    private void Duplicate(int index)
+    private async Task Duplicate(int index)
     {
         var target = State.DuplicateArrayItem(Field, Path, index);
         if (target >= 0) _focusRow = target;
+        await Dependents();
     }
 
-    private void Remove(int index)
+    private async Task Remove(int index)
     {
         State.RemoveArrayItem(Path, index);
 
@@ -229,6 +240,8 @@
         // only thing left to aim at is the button that refills it.
         if (Count == 0) _focusAdd = true;
         else _focusRow = Math.Min(index, Count - 1);
+
+        await Dependents();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

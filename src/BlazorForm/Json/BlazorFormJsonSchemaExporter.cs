@@ -190,6 +190,17 @@ public static class BlazorFormJsonSchemaExporter
         if (field.DebounceMilliseconds > 0) writer.WriteNumber("x-debounce", field.DebounceMilliseconds);
         if (field.CustomRenderer is { Length: > 0 } renderer) writer.WriteString("x-renderer", renderer);
 
+        // The other half of a cross-field rule. The rule itself may have no JSON form (a delegate), but
+        // "revalidate me when that changes" always does, and losing it on a round trip would put back
+        // the stale-message bug the declaration exists to prevent.
+        if (field.RevalidateOn.Count > 0)
+        {
+            writer.WritePropertyName("x-revalidateOn");
+            writer.WriteStartArray();
+            foreach (var path in field.RevalidateOn) writer.WriteStringValue(path);
+            writer.WriteEndArray();
+        }
+
         // `examples` is JSON Schema's own vocabulary for "values like these", which is exactly what a
         // datalist offers — no x- prefix needed.
         if (field.Suggestions.Count > 0)

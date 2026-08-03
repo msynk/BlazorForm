@@ -362,9 +362,42 @@ public sealed class BlazorFormFieldBuilder
     }
 
     /// <summary>Requires this field to equal the value at another path — the "confirm password" rule.</summary>
+    /// <remarks>
+    /// The other path is registered as a revalidation dependency, so fixing the <em>password</em>
+    /// clears the confirmation's "these do not match" without the user having to go back and touch a
+    /// box that was already right. See <see cref="RevalidateOn"/>.
+    /// </remarks>
     public BlazorFormFieldBuilder MatchesField(string otherPath, string? otherLabel = null, string? message = null)
     {
         _field.AddValidator(new BlazorFormCompareRule(otherPath, otherLabel, message));
+        return RevalidateOn(otherPath);
+    }
+
+    /// <summary>
+    /// Revalidates this field whenever one of <paramref name="paths"/> changes — for a rule that reads
+    /// another field's value and would otherwise go stale when <em>that</em> field is the one corrected.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A cross-field rule lives on one of the two fields it compares, so only one of the two changes
+    /// ever runs it. Declaring the other here closes the gap: React Hook Form spells it <c>deps</c>,
+    /// TanStack Form spells it <c>onChangeListenTo</c>. <see cref="MatchesField"/> registers its own
+    /// dependency, so a confirm-password field needs nothing extra.
+    /// </para>
+    /// <para>
+    /// Paths resolve relative to the object that owns the field before falling back to the root, so a
+    /// rule on a repeater's item template can name a sibling and mean that row. A dependent that has
+    /// not been touched on a form that has not been submitted is left alone, so this can never make a
+    /// field the user has never reached start showing errors.
+    /// </para>
+    /// </remarks>
+    public BlazorFormFieldBuilder RevalidateOn(params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrEmpty(path) || _field.RevalidateOn.Contains(path)) continue;
+            _field.RevalidateOn.Add(path);
+        }
         return this;
     }
 

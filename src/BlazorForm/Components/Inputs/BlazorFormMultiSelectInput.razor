@@ -103,8 +103,19 @@
             return Context.SetValueAsync(Enum.ToObject(flags, combined));
         }
 
-        // A plain list of strings; the data accessor converts each element to the model's element type.
-        return Context.SetValueAsync(set.ToList());
+        // A plain list of strings, in the order the options are declared rather than the order they
+        // were clicked. Emitting the set's own order makes the stored value depend on the sequence of
+        // ticks: choose A then B and the model holds [A, B]; untick A and tick it again and it holds
+        // [B, A] — the same answer, but no longer equal to the baseline, so the form reports unsaved
+        // changes the user did not make. Anything the schema does not offer (a value loaded from
+        // storage that is no longer an option) keeps its place at the end rather than being dropped.
+        var ordered = new List<string>(set.Count);
+        foreach (var option in Context.Options)
+            if (set.Remove(option.Value)) ordered.Add(option.Value);
+        ordered.AddRange(set);
+
+        // The data accessor converts each element to the model's element type.
+        return Context.SetValueAsync(ordered);
     }
 
 }

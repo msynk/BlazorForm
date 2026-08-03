@@ -54,7 +54,9 @@ public static class BlazorFormDataAnnotationsIntegration
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        state.ExternalValidator = (_, data, services) =>
+        // Combined rather than assigned: a form has one external-validator slot, and calling this
+        // alongside UseFluentValidation() used to mean whichever came second silently won.
+        state.ExternalValidator = state.ExternalValidator.CombineWith((_, data, services) =>
         {
             if (data.Root is not { } model)
                 return new ValueTask<IReadOnlyList<BlazorFormValidationMessage>>(Array.Empty<BlazorFormValidationMessage>());
@@ -69,7 +71,7 @@ public static class BlazorFormDataAnnotationsIntegration
                 results.AddRange(validatable.Validate(context).Where(r => r != ValidationResult.Success));
 
             return new ValueTask<IReadOnlyList<BlazorFormValidationMessage>>(Map(results));
-        };
+        });
         return state;
     }
 

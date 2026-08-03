@@ -132,6 +132,15 @@ public static class BlazorFormJsonSchemaImporter
             field.MaxFileSize = bytes;
         if (schema.TryGetProperty("x-step", out var step) && step.TryGetDouble(out var stepValue))
             field.NumericStep = stepValue;
+        if (schema.TryGetProperty("x-revalidateOn", out var revalidate) && revalidate.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in revalidate.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String) continue;
+                if (item.GetString() is { Length: > 0 } dependency && !field.RevalidateOn.Contains(dependency))
+                    field.RevalidateOn.Add(dependency);
+            }
+        }
 
         // `examples` is JSON Schema's own "values like these", which is what a datalist offers.
         if (schema.TryGetProperty("examples", out var examples) && examples.ValueKind == JsonValueKind.Array)

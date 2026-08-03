@@ -141,6 +141,7 @@ public sealed class BlazorFormFieldContext
         State.SetValue(Path, parsed);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnChange))
             await State.ValidateFieldAsync(Field, Path, includeAsync: false);
+        await State.ValidateDependentsAsync(Path);
     }
 
     /// <summary>Writes a value directly and revalidates according to the form's trigger.</summary>
@@ -149,6 +150,7 @@ public sealed class BlazorFormFieldContext
         State.SetValue(Path, value);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnChange))
             await State.ValidateFieldAsync(Field, Path, includeAsync: false);
+        await State.ValidateDependentsAsync(Path);
     }
 
     /// <summary>
@@ -160,6 +162,9 @@ public sealed class BlazorFormFieldContext
         State.MarkTouched(Path);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnBlur))
             await State.ValidateFieldAsync(Field, Path, includeAsync: true);
+        // On blur the dependents get the full treatment: leaving a field is exactly when an async
+        // cross-field check is affordable, and it is the last chance before submit.
+        await State.ValidateDependentsAsync(Path, includeAsync: true);
     }
 
     /// <summary>Runs every rule for this field, including async ones, regardless of the configured trigger.</summary>

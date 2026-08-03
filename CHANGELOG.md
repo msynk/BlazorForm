@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`RevalidateOn(...)`** — the other half of a cross-field rule. A rule that compares two values lives
+  on one of them, so only one of the two changes ever runs it: the user mistypes the confirmation, is
+  told the two do not match, then fixes the *password* to agree with what they typed — and the message
+  under the confirmation is now false, and stays there until they go back and touch a field that was
+  already right. Declaring what a field reads makes the correction land wherever it is made.
+  `MatchesField(...)` and `[Compare]` register their own dependency, so a confirm-password field needs
+  nothing extra. Paths resolve relative to the object that owns the field, so a rule on a repeater's
+  template means that row, and a dependent that has not been touched on a form that has not been
+  submitted is left alone — the point is to correct a verdict already on screen, never to bring one
+  forward. React Hook Form spells it `deps`; TanStack Form spells it `onChangeListenTo`. It round-trips
+  through JSON as `x-revalidateOn`, and `Definition.Validate()` reports a comparison rule that never
+  revalidates.
+
 - **Combobox (`AsCombobox()`)** — a text box that filters its options as the user types, for the
   dropdown that grew past a screenful. It is built on the browser's own `<input list>` + `<datalist>`,
   so filtering, keyboard navigation, touch behaviour and screen-reader support are the platform's
@@ -164,6 +177,56 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **`UseDataAnnotations()` and `UseFluentValidation()` no longer cancel each other out.** A form has
+  one external-validator slot and every integration assigned to it, so wiring up both — which is a
+  perfectly reasonable thing to want, since they cover different rules — meant whichever line came
+  second silently threw the first away. They combine now, and a complaint both layers report in the
+  same words on the same field is still read once. `BlazorFormExternalValidator.CombineWith(...)` does
+  the same for a hand-written one.
+- **A file field can be focused.** `InputFile` is a component rather than an element, so there was no
+  focus target to register — which made a required file the single field type that "go to the first
+  error" and the error summary's link silently walked past, on a form whose only problem was the
+  missing file. The wrapper takes focus, exactly as a radio group's does.
+- **A switch is visible in Windows High Contrast Mode.** Its on/off state was drawn entirely in a
+  background colour, which forced-colors replaces — so checked and unchecked came out identical and
+  the state was conveyed by a colour the mode had just taken away. The checkbox gets its native
+  rendering back there, and an invalid field is marked by a dashed border rather than a hue.
+- **A repeater operation revalidates what depends on the list.** Adding, removing, moving or
+  duplicating a row changes the value the field binds to, but a repeater has no field context to route
+  through, so a rule elsewhere declaring `RevalidateOn` on the list was judged once and never again.
+- **Clearing a hidden field is a change like any other.** `ClearOnHide` emptied the value and told
+  nobody: a total that read the field kept the number it had just thrown away, a cascading select that
+  depended on it kept options built for a value no longer in the model, and `OnFieldChanged` never
+  fired — so an autosave saved a field the form had already emptied. It now runs the same three sweeps
+  a typed-in value does, and a chain of conditions that clear each other settles rather than
+  recursing. This is the same fix a computed value needed.
+- **A multi-select or tag list is no longer dirty for ever.** Both write a brand-new collection on
+  every edit, and the baseline was held by reference — so the field was reported changed from the
+  first click and never clean again, whatever the user did. An "undo" button, an unsaved-changes
+  prompt and a disabled save button all read that. Collections are baselined element by element now,
+  as a repeater's rows already were, so ticking a box and unticking it leaves the form clean. A
+  `[Flags]` multi-select is unaffected: it renders as boxes but stores one value, which compares
+  perfectly well as itself.
+- **A multi-select stores its values in the schema's order, not the order they were clicked.** Ticking
+  A then B and ticking B then A produced different data for the same answer, which made the previous
+  bug's "put it back exactly as it was" impossible even in principle.
+- **`ResetField(path)` runs the change sweep.** Undoing one answer skipped everything a typed-in value
+  does except recomputation, so a cascading select kept the options loaded for the value that was just
+  undone, a branch the answer was holding open stayed open, and nothing watching `OnFieldChanged`
+  heard about it.
+- **`Reset()` restores a collection the user emptied.** Putting a snapshot back needed a live list to
+  refill, so a field cleared to null — by `ClearOnHide`, or by a clear button — was left empty by the
+  reset that was supposed to bring its contents back.
+- **The error summary is not announced twice.** It carried `role="alert"` *and* took focus, and a
+  screen reader announces a live region that receives focus once for the region changing and again for
+  the focus arriving — some read it more times than that. The role is now used only when the summary
+  does not take focus itself, which is the case where nothing else would say anything at all.
+- **An unlabelled field is still named in the error summary.** A hand-built schema need not label
+  every field, and "This field is required." on its own names nothing — which is the one job a summary
+  entry has. The field's name is used when there is no label.
+- An external validator's results are filtered against the hidden fields computed once per pass rather
+  than once per message; fifty failures on a two-hundred-field schema were re-evaluating every
+  condition in the form fifty times to answer a question whose answer had not changed.
 - **A combobox no longer stores a half-typed label as its value.** `UpdateOnInput()` on one wrote
   every keystroke straight through, bypassing the label-to-value mapping — so "Fran" became the
   country, and then "Franc", each flagged in turn as an answer that is on no list. A combobox now
