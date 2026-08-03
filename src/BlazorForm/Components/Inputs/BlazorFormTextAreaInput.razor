@@ -9,7 +9,7 @@
           placeholder="@Field.Placeholder"
           disabled="@Disabled"
           readonly="@ReadOnly"
-          maxlength="@Field.MaxLength"
+          maxlength="@MaxLengthAttribute"
           rows="@Rows"
           autocomplete="@Field.Autocomplete"
           aria-required="@AriaRequired"
@@ -25,6 +25,9 @@
     <p class="ff-counter @(Length > Field.MaxLength ? "ff-counter--over" : "")" aria-hidden="true">
         @Context.Text(BlazorFormMessageKeys.CharacterCount, Length, Field.MaxLength)
     </p>
+    @* See BlazorFormInputBase.CharacterCountAnnouncement: the visible counter is decorative, so the
+       remaining count is announced politely as the limit approaches. *@
+    <p class="ff-sr-only" aria-live="polite">@CharacterCountAnnouncement</p>
 }
 
 @code {

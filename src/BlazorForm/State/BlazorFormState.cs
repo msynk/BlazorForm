@@ -19,11 +19,13 @@ public sealed class BlazorFormState : IDisposable
     private readonly Dictionary<string, CancellationTokenSource> _fieldValidationCts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _optionsCts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _conversionErrors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Exception> _optionsErrors = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly bool _hasClearOnHide;
     private readonly bool _hasComputed;
     private CancellationTokenSource? _formValidationCts;
     private bool _readOnly;
+    private bool _disabled;
     private bool _disposed;
 
     public BlazorFormState(BlazorFormDefinition definition, IBlazorFormDataAccessor data, IServiceProvider? services = null)
@@ -73,6 +75,24 @@ public sealed class BlazorFormState : IDisposable
         }
     }
 
+    /// <summary>
+    /// Disables every control at once — while a save is in flight, or while the record is locked by
+    /// someone else. Distinct from <see cref="ReadOnly"/> on purpose: a read-only form can still be
+    /// read, tabbed through and copied from, which is what a review screen wants; a disabled one is
+    /// skipped by keyboard navigation entirely, which is only right when the form is genuinely
+    /// inoperable.
+    /// </summary>
+    public bool Disabled
+    {
+        get => _disabled;
+        set
+        {
+            if (_disabled == value) return;
+            _disabled = value;
+            NotifyChanged();
+        }
+    }
+
     /// <summary>When a field revalidates before the form has been submitted. Defaults to <see cref="BlazorFormValidationTrigger.OnChange"/>.</summary>
     public BlazorFormValidationTrigger ValidationTrigger { get; set; } = BlazorFormValidationTrigger.OnChange;
 
@@ -85,6 +105,32 @@ public sealed class BlazorFormState : IDisposable
 
     /// <summary>Index of the active wizard step (ignored for non-wizard forms).</summary>
     public int CurrentStepIndex { get; private set; }
+
+    /// <summary>
+    /// The furthest step the user has reached. Steps up to it have been validated on the way past, so
+    /// they can be returned to freely — including forwards.
+    /// </summary>
+    /// <remarks>
+    /// Without this, going back to step 1 of 4 makes steps 2 and 3 unreachable except by pressing Next
+    /// through them again, which is the single most common complaint about hand-rolled wizards: the
+    /// user came back to fix one answer and is now made to walk the whole form.
+    /// </remarks>
+    public int FurthestStepIndex
+    {
+        // Never behind the current step: a condition that hides the step the user is on can move them
+        // forward through ClampStep, and where they are standing is by definition somewhere they have
+        // reached.
+        get => Math.Max(_furthestStepIndex, CurrentStepIndex);
+        private set => _furthestStepIndex = value;
+    }
+
+    private int _furthestStepIndex;
+
+    /// <summary>Whether a step may be jumped to directly — it has been reached at least once.</summary>
+    public bool IsStepReachable(int index)
+        => index >= 0 && index < Definition.Steps.Count
+           && index <= FurthestStepIndex
+           && IsStepVisible(Definition.Steps[index]);
 
     /// <summary>Number of times submission has been attempted.</summary>
     public int SubmitCount { get; private set; }
@@ -197,7 +243,7 @@ public sealed class BlazorFormState : IDisposable
         Data.SetValue(path, value);
         RecordConversionResult(path, value);
 
-        _dirty.Add(path);
+        TrackDirty(path);
         if (markTouched) _touched.Add(path);
 
         // Side effects first, so a listener sees the form in its settled state.
@@ -237,7 +283,7 @@ public sealed class BlazorFormState : IDisposable
             if (Equals(Data.GetValue(path), next)) continue;
 
             Data.SetValue(path, next);
-            _dirty.Add(path);
+            TrackDirty(path);
             RecomputeValues(path, depth + 1);
         }
     }
@@ -249,11 +295,19 @@ public sealed class BlazorFormState : IDisposable
     /// list means "depends on everything", matching how conditions declare their dependencies.
     /// </summary>
     private static bool ReadsPath(IList<string> dependencies, string path, string scope)
-    {
-        if (dependencies.Count == 0) return true;
+        => dependencies.Count == 0 || DeclaresPath(dependencies, path, scope);
 
+    /// <summary>
+    /// Whether a declared dependency list names <paramref name="path"/> — matched both absolutely and
+    /// relative to <paramref name="scope"/>, and by prefix, so naming a container covers everything
+    /// inside it. Unlike <see cref="ReadsPath"/> an empty list matches nothing, which is what "these
+    /// options never need reloading" means.
+    /// </summary>
+    private static bool DeclaresPath(IList<string> dependencies, string path, string scope)
+    {
         foreach (var dependency in dependencies)
         {
+            if (dependency.Length == 0) continue;
             if (BlazorFormPath.IsAtOrUnder(path, dependency)) return true;
             if (scope.Length > 0 && BlazorFormPath.IsAtOrUnder(path, BlazorFormPath.Combine(scope, dependency)))
                 return true;
@@ -313,6 +367,38 @@ public sealed class BlazorFormState : IDisposable
         }
     }
 
+    /// <summary>
+    /// Records whether <paramref name="path"/> still holds the value it started with. Dirtiness is a
+    /// comparison, not a flag: a field the user typed into and then put back is not a change, and an
+    /// "undo" or "you have unsaved work" prompt bound to <see cref="IsFormDirty"/> must not fire for it.
+    /// This is how <c>dirtyFields</c> behaves in React Hook Form and TanStack Form.
+    /// </summary>
+    private void TrackDirty(string path)
+    {
+        if (_initialValues.TryGetValue(path, out var initial) && MatchesInitial(initial, Data.GetValue(path)))
+            _dirty.Remove(path);
+        else
+            _dirty.Add(path);
+    }
+
+    /// <summary>
+    /// Whether a value equals the one captured as the baseline. Array baselines are snapshots of the
+    /// elements, so a row added and then removed again leaves the list clean.
+    /// </summary>
+    private static bool MatchesInitial(object? initial, object? current)
+    {
+        if (initial is List<object?> snapshot)
+        {
+            if (current is not IList live || live.Count != snapshot.Count) return false;
+            for (var i = 0; i < snapshot.Count; i++)
+                if (!Equals(snapshot[i], live[i])) return false;
+            return true;
+        }
+
+        if (ReferenceEquals(initial, current)) return true;
+        return initial is not null && current is not null && initial.Equals(current);
+    }
+
     public bool IsTouched(string path) => _touched.Contains(path);
     public bool IsDirty(string path) => _dirty.Contains(path);
     public bool IsFormDirty => _dirty.Count > 0;
@@ -357,7 +443,7 @@ public sealed class BlazorFormState : IDisposable
     /// readers, so read-only is rendered with the <c>readonly</c> attribute instead. See <see cref="IsReadOnly"/>.
     /// </summary>
     public bool IsDisabled(BlazorFormFieldDefinition field, string? path = null)
-        => field.DisabledWhen is not null && field.DisabledWhen.Evaluate(ScopeFor(path));
+        => Disabled || (field.DisabledWhen is not null && field.DisabledWhen.Evaluate(ScopeFor(path)));
 
     /// <summary>Whether a field is read-only, either in its own right or because the whole form is.</summary>
     public bool IsReadOnly(BlazorFormFieldDefinition field) => ReadOnly || field.ReadOnly;
@@ -395,7 +481,7 @@ public sealed class BlazorFormState : IDisposable
             _touched.Remove(path);
             // Emptying a field is a change to the data like any other, so the form is now dirty even
             // though the user never typed in this box.
-            _dirty.Add(path);
+            TrackDirty(path);
         }
     }
 
@@ -439,6 +525,22 @@ public sealed class BlazorFormState : IDisposable
     public bool IsLoadingOptions(string path) => _optionsInFlight.Contains(path);
 
     /// <summary>
+    /// The exception a field's options provider last failed with, or null when it has not failed. A
+    /// lookup that goes over the network fails for ordinary reasons, and losing the whole form to it
+    /// would be out of proportion — so the failure is recorded here, announced through
+    /// <see cref="OptionsLoadFailed"/>, and shown in place of the choices.
+    /// </summary>
+    public Exception? OptionsError(string path)
+        => _optionsErrors.TryGetValue(path, out var error) ? error : null;
+
+    /// <summary>
+    /// Raised with the field path and the exception when an options provider throws. Subscribe to log
+    /// it; the form itself carries on with an empty list and retries on the next
+    /// <see cref="InvalidateOptions"/>.
+    /// </summary>
+    public event Action<string, Exception>? OptionsLoadFailed;
+
+    /// <summary>
     /// Runs a field's options provider unless its results are already cached. Renderers call this on
     /// first render and after a dependency changes; it is a no-op for fields with static options.
     /// </summary>
@@ -449,6 +551,7 @@ public sealed class BlazorFormState : IDisposable
 
         var cts = new CancellationTokenSource();
         _optionsCts[path] = cts;
+        _optionsErrors.Remove(path);
 
         NotifyChanged();
         try
@@ -460,6 +563,18 @@ public sealed class BlazorFormState : IDisposable
         catch (OperationCanceledException)
         {
             // A newer load (or disposal) superseded this one; the cache stays empty so it retries.
+        }
+        catch (Exception ex)
+        {
+            // A lookup that goes over the network fails for ordinary reasons — a timeout, a 503. Letting
+            // it escape would take down the component that asked for it (renderers call this from
+            // OnParametersSetAsync), so it is recorded and shown instead. The cache stays empty, so
+            // invalidating the field retries.
+            if (!cts.IsCancellationRequested)
+            {
+                _optionsErrors[path] = ex;
+                OptionsLoadFailed?.Invoke(path, ex);
+            }
         }
         finally
         {
@@ -477,7 +592,8 @@ public sealed class BlazorFormState : IDisposable
     public void InvalidateOptions(string path)
     {
         CancelOptionsLoad(path);
-        if (_loadedOptions.Remove(path)) NotifyChanged();
+        var cleared = _optionsErrors.Remove(path);
+        if (_loadedOptions.Remove(path) || cleared) NotifyChanged();
     }
 
     /// <summary>Aborts an in-flight options load, so a superseded lookup stops doing work.</summary>
@@ -496,13 +612,20 @@ public sealed class BlazorFormState : IDisposable
         foreach (var (field, path) in EnumerateFieldPaths())
         {
             if (field.OptionsProvider is null || !_loadedOptions.ContainsKey(path)) continue;
-            if (!field.OptionsDependencies.Any(d => string.Equals(d, changedPath, StringComparison.OrdinalIgnoreCase)))
-                continue;
+            // Matched the same way conditions and computed dependencies are: relative to the object that
+            // owns the field, so a cascading select inside a repeater row can name its sibling
+            // ("Country") and still reload, and by prefix, so naming a container covers its members.
+            if (!DeclaresPath(field.OptionsDependencies, changedPath, BlazorFormPath.Parent(path))) continue;
 
             CancelOptionsLoad(path);
             _loadedOptions.Remove(path);
+            _optionsErrors.Remove(path);
             // The previously selected option may no longer exist in the new list.
-            if (Data.GetValue(path) is not null) Data.SetValue(path, null);
+            if (Data.GetValue(path) is not null)
+            {
+                Data.SetValue(path, null);
+                TrackDirty(path);
+            }
         }
     }
 
@@ -533,8 +656,11 @@ public sealed class BlazorFormState : IDisposable
         foreach (var (_, path) in EnumerateFieldPaths())
             order.TryAdd(path, i++);
 
+        // A form-level message belongs to no control, so it cannot be "the first one to go and fix" in
+        // the positional sense — it leads instead, which is where a reader looking for what is wrong
+        // with the form as a whole expects to find it.
         return AllMessages
-            .OrderBy(m => order.TryGetValue(m.FieldPath, out var idx) ? idx : int.MaxValue)
+            .OrderBy(m => m.FieldPath.Length == 0 ? -1 : order.TryGetValue(m.FieldPath, out var idx) ? idx : int.MaxValue)
             .ThenBy(m => m.FieldPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -588,51 +714,78 @@ public sealed class BlazorFormState : IDisposable
     {
         if (!Definition.IsWizard) return await ValidateAsync(includeAsync);
 
-        // Through CurrentStep, so a step a condition has just hidden is never the one being validated.
-        var step = CurrentStep!;
+        // Shares the form-level token with ValidateAsync, so a second "Next" (or a submit) supersedes a
+        // run still waiting on an async rule instead of letting the older verdict land last.
+        _formValidationCts?.Cancel();
+        _formValidationCts?.Dispose();
+        var cts = _formValidationCts = new CancellationTokenSource();
 
-        // Each step field is resolved as a path rather than a top-level name, so a step can own a
-        // nested field ("Address.City") just as easily as a root one.
-        var messages = new List<BlazorFormValidationMessage>();
-        foreach (var path in step.Fields)
-        {
-            if (Definition.FindByPath(path) is not { } field) continue;
-            messages.AddRange(await _validator.ValidateFieldAsync(field, path, Data, Services, includeAsync));
-        }
-
-        // External validators (FluentValidation and friends) see the whole model, so their results are
-        // filtered down to the fields this step owns — otherwise a later step's errors would block it.
-        if (ExternalValidator is not null)
-        {
-            var external = await ExternalValidator(Definition, Data, Services);
-            messages.AddRange(external.Where(m =>
-                step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(m.FieldPath, f)) && !IsHidden(m.FieldPath)));
-        }
-
-        // Replace only messages for fields in this step, and mark them touched so the errors show.
-        foreach (var path in step.Fields)
-        {
-            RemoveMessagesUnder(path);
-            _touched.Add(path);
-        }
-        foreach (var m in messages)
-        {
-            AddMessage(m);
-            // A step field may be an object or array, so touch the exact path each message landed on.
-            _touched.Add(m.FieldPath);
-        }
-
-        // A value the model could never accept must block the step too, even though no rule produced it.
-        var blocked = false;
-        foreach (var path in _conversionErrors.Keys.Where(p => step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(p, f))))
-        {
-            AddMessage(ConversionMessage(path));
-            _touched.Add(path);
-            blocked = true;
-        }
-
+        IsValidating = true;
         NotifyChanged();
-        return !blocked && !messages.Any(m => m.Severity == BlazorFormValidationSeverity.Error);
+        try
+        {
+            // Through CurrentStep, so a step a condition has just hidden is never the one being validated.
+            var step = CurrentStep!;
+
+            // Each step field is resolved as a path rather than a top-level name, so a step can own a
+            // nested field ("Address.City") just as easily as a root one.
+            var messages = new List<BlazorFormValidationMessage>();
+            foreach (var path in step.Fields)
+            {
+                if (Definition.FindByPath(path) is not { } field) continue;
+                messages.AddRange(await _validator.ValidateFieldAsync(field, path, Data, Services, includeAsync, cts.Token));
+            }
+
+            // External validators (FluentValidation and friends) see the whole model, so their results are
+            // filtered down to the fields this step owns — otherwise a later step's errors would block it.
+            if (ExternalValidator is not null)
+            {
+                var external = await ExternalValidator(Definition, Data, Services);
+                messages.AddRange(external.Where(m =>
+                    step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(m.FieldPath, f)) && !IsHidden(m.FieldPath)));
+            }
+
+            cts.Token.ThrowIfCancellationRequested();
+
+            // Replace only messages for fields in this step, and mark them touched so the errors show.
+            foreach (var path in step.Fields)
+            {
+                RemoveMessagesUnder(path);
+                _touched.Add(path);
+            }
+            foreach (var m in messages)
+            {
+                AddMessage(m);
+                // A step field may be an object or array, so touch the exact path each message landed on.
+                _touched.Add(m.FieldPath);
+            }
+
+            // A value the model could never accept must block the step too, even though no rule produced it.
+            var blocked = false;
+            foreach (var path in _conversionErrors.Keys.Where(p => step.Fields.Any(f => BlazorFormPath.IsAtOrUnder(p, f))))
+            {
+                AddMessage(ConversionMessage(path));
+                _touched.Add(path);
+                blocked = true;
+            }
+
+            return !blocked && !messages.Any(m => m.Severity == BlazorFormValidationSeverity.Error);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded: the run that replaced this one decides whether the step may be left.
+            return false;
+        }
+        finally
+        {
+            if (ReferenceEquals(_formValidationCts, cts))
+            {
+                IsValidating = false;
+                _formValidationCts = null;
+                cts.Dispose();
+            }
+            NotifyChanged();
+        }
     }
 
     /// <summary>Validates a single field and refreshes only its messages.</summary>
@@ -805,18 +958,7 @@ public sealed class BlazorFormState : IDisposable
     public void Reset()
     {
         foreach (var (path, value) in _initialValues)
-        {
-            if (value is List<object?> snapshot)
-            {
-                if (Data.GetValue(path) is IList live)
-                {
-                    live.Clear();
-                    foreach (var item in snapshot) live.Add(item);
-                }
-                continue;
-            }
-            Data.SetValue(path, value);
-        }
+            RestoreInitial(path, value);
 
         _messages.Clear();
         _touched.Clear();
@@ -827,12 +969,64 @@ public sealed class BlazorFormState : IDisposable
         // reset and repopulate a select the user has just cleared.
         foreach (var path in _optionsCts.Keys.ToList()) CancelOptionsLoad(path);
         _loadedOptions.Clear();
+        _optionsErrors.Clear();
 
         SubmitCount = 0;
         HasValidated = false;
         CurrentStepIndex = 0;
+        FurthestStepIndex = 0;
         ClampStep();
         NotifyChanged();
+    }
+
+    /// <summary>
+    /// Puts one field — and anything nested beneath it — back to the value it started with, clearing
+    /// its messages and its touched/dirty state. This is the "undo just this answer" that a long form
+    /// needs and that <see cref="Reset"/> is far too blunt for; React Hook Form spells it
+    /// <c>resetField</c>.
+    /// </summary>
+    /// <remarks>
+    /// A path the form has no baseline for — a field inside a row added since construction — is
+    /// emptied, because "the value it started with" is nothing.
+    /// </remarks>
+    public void ResetField(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+
+        var restored = false;
+        foreach (var (key, initial) in _initialValues.Where(kv => BlazorFormPath.IsAtOrUnder(kv.Key, path)))
+        {
+            RestoreInitial(key, initial);
+            restored = true;
+        }
+
+        // Nothing under this path was ever captured, so its starting value was nothing. Note the test is
+        // "no baseline anywhere beneath", not "none at this exact path": an object field holds no value
+        // of its own, so emptying it would throw away the children that were just put back.
+        if (!restored && Data.GetValue(path) is not null)
+            Data.SetValue(path, null);
+
+        RemoveMessagesUnder(path);
+        RemovePathsUnder(_touched, path);
+        RemovePathsUnder(_dirty, path);
+        foreach (var key in _conversionErrors.Keys.Where(k => BlazorFormPath.IsAtOrUnder(k, path)).ToList())
+            _conversionErrors.Remove(key);
+
+        RecomputeValues(path);
+        NotifyChanged();
+    }
+
+    /// <summary>Puts a single captured baseline back, restoring array contents element by element.</summary>
+    private void RestoreInitial(string path, object? initial)
+    {
+        if (initial is List<object?> snapshot)
+        {
+            if (Data.GetValue(path) is not IList live) return;
+            live.Clear();
+            foreach (var item in snapshot) live.Add(item);
+            return;
+        }
+        Data.SetValue(path, initial);
     }
 
     /// <summary>
@@ -950,6 +1144,7 @@ public sealed class BlazorFormState : IDisposable
             if (IsStepVisible(Definition.Steps[i]))
             {
                 CurrentStepIndex = i;
+                FurthestStepIndex = Math.Max(FurthestStepIndex, i);
                 NotifyChanged();
                 return true;
             }
@@ -972,7 +1167,12 @@ public sealed class BlazorFormState : IDisposable
         }
     }
 
-    /// <summary>Jumps to a step by index. Hidden steps and out-of-range indices are ignored.</summary>
+    /// <summary>
+    /// Jumps to a step by index. Hidden steps and out-of-range indices are ignored. Jumping forward
+    /// past a step the user has not reached is allowed here — the caller has asked for it explicitly —
+    /// but it skips that step's validation, which is why the stepper only offers steps up to
+    /// <see cref="FurthestStepIndex"/>.
+    /// </summary>
     public void GoToStep(int index)
     {
         if (!Definition.IsWizard || index < 0 || index >= Definition.Steps.Count) return;
@@ -980,6 +1180,7 @@ public sealed class BlazorFormState : IDisposable
         if (index == CurrentStepIndex) return;
 
         CurrentStepIndex = index;
+        FurthestStepIndex = Math.Max(FurthestStepIndex, index);
         NotifyChanged();
     }
 
@@ -1024,7 +1225,7 @@ public sealed class BlazorFormState : IDisposable
         ShiftMessagesFrom(arrayPath, target, +1);
         ShiftPathSet(_touched, arrayPath, target, +1);
         ShiftPathSet(_dirty, arrayPath, target, +1);
-        _dirty.Add(arrayPath);
+        TrackDirty(arrayPath);
         // The row was created a line ago, so every value in it is a placeholder the default may replace.
         ApplyItemDefaults(arrayField, BlazorFormPath.Combine(arrayPath, target), overwrite: true);
         RecomputeValues(arrayPath);
@@ -1060,7 +1261,7 @@ public sealed class BlazorFormState : IDisposable
         foreach (var (relative, value) in values)
             Data.SetValue(targetPath + relative, value);
 
-        _dirty.Add(arrayPath);
+        TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
         NotifyChanged();
         return target;
@@ -1137,7 +1338,7 @@ public sealed class BlazorFormState : IDisposable
         ShiftPathSet(_dirty, arrayPath, index + 1, -1);
 
         RemoveMessagesFor(arrayPath);
-        _dirty.Add(arrayPath);
+        TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
         NotifyChanged();
     }
@@ -1155,7 +1356,7 @@ public sealed class BlazorFormState : IDisposable
         // Indices shifted, so everything keyed by them is re-keyed to follow its item — the row the
         // user just moved keeps the error it already showed instead of appearing to be fixed.
         RemapArrayIndices(arrayPath, index => MapMovedIndex(index, from, to));
-        _dirty.Add(arrayPath);
+        TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
         NotifyChanged();
     }
@@ -1545,5 +1746,6 @@ public sealed class BlazorFormState : IDisposable
 
         StateChanged = null;
         FieldChanged = null;
+        OptionsLoadFailed = null;
     }
 }

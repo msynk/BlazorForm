@@ -99,6 +99,7 @@ public static class BlazorFormJsonSchemaImporter
             Label = ReadString(schema, "title") ?? BlazorFormFieldBuilder.Humanize(name),
             HelpText = ReadString(schema, "description"),
             Placeholder = ReadString(schema, "x-placeholder"),
+            Group = ReadString(schema, "x-group"),
             Autocomplete = ReadString(schema, "x-autocomplete"),
             InputMode = ReadString(schema, "x-inputMode"),
             Prefix = ReadString(schema, "x-prefix"),
@@ -280,6 +281,7 @@ public static class BlazorFormJsonSchemaImporter
             "range" => BlazorFormFieldType.Range,
             "color" => BlazorFormFieldType.Color,
             "tel" => BlazorFormFieldType.Tel,
+            "search" => BlazorFormFieldType.Search,
             "password" => BlazorFormFieldType.Password,
             "select" => BlazorFormFieldType.Select,
             "file" => BlazorFormFieldType.File,
@@ -391,16 +393,23 @@ public static class BlazorFormJsonSchemaImporter
         if (!schema.TryGetProperty("enum", out var en) || en.ValueKind != JsonValueKind.Array)
             return;
 
-        string[]? names = null;
-        if (schema.TryGetProperty("enumNames", out var enNames) && enNames.ValueKind == JsonValueKind.Array)
-            names = enNames.EnumerateArray().Select(e => e.GetString() ?? "").ToArray();
+        var names = ReadStringArray(schema, "enumNames");
+        var groups = ReadStringArray(schema, "x-enumGroups");
+
+        // A set rather than a positional array: which options are disabled is a property of the values,
+        // not of their order, and a schema hand-written by someone else will spell it that way.
+        var disabled = new HashSet<string>(StringComparer.Ordinal);
+        if (schema.TryGetProperty("x-enumDisabled", out var dis) && dis.ValueKind == JsonValueKind.Array)
+            foreach (var d in dis.EnumerateArray())
+                disabled.Add(d.ValueKind == JsonValueKind.String ? d.GetString()! : d.ToString());
 
         var i = 0;
         foreach (var item in en.EnumerateArray())
         {
             var value = item.ValueKind == JsonValueKind.String ? item.GetString()! : item.ToString();
             var label = names is not null && i < names.Length ? names[i] : value;
-            field.Options.Add(new BlazorFormSelectOption(value, label));
+            var group = groups is not null && i < groups.Length && groups[i].Length > 0 ? groups[i] : null;
+            field.Options.Add(new BlazorFormSelectOption(value, label, disabled.Contains(value), group));
             i++;
         }
 
@@ -588,6 +597,11 @@ public static class BlazorFormJsonSchemaImporter
 
     private static string? ReadString(JsonElement element, string property)
         => element.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static string[]? ReadStringArray(JsonElement element, string property)
+        => element.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.Array
+            ? v.EnumerateArray().Select(e => e.GetString() ?? "").ToArray()
+            : null;
 
     /// <summary>
     /// Resolves <c>$ref</c> pointers and flattens <c>allOf</c> against the document they came from.

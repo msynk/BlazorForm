@@ -55,6 +55,9 @@ else
     <p class="ff-counter @(Length > Field.MaxLength ? "ff-counter--over" : "")" aria-hidden="true">
         @Context.Text(BlazorFormMessageKeys.CharacterCount, Length, Field.MaxLength)
     </p>
+    @* The counter above is decorative, so the same information is announced here — but only once the
+       limit is close enough to matter. See BlazorFormInputBase.CharacterCountAnnouncement. *@
+    <p class="ff-sr-only" aria-live="polite">@CharacterCountAnnouncement</p>
 }
 
 @code {
@@ -70,7 +73,7 @@ else
                                               placeholder="@Field.Placeholder"
                                               disabled="@Disabled"
                                               readonly="@ReadOnly"
-                                              maxlength="@Field.MaxLength"
+                                              maxlength="@MaxLengthAttribute"
                                               list="@SuggestionsId"
                                               autocomplete="@Field.Autocomplete"
                                               inputmode="@Field.InputMode"
@@ -91,6 +94,7 @@ else
         BlazorFormFieldType.Email => "email",
         BlazorFormFieldType.Url => "url",
         BlazorFormFieldType.Tel => "tel",
+        BlazorFormFieldType.Search => "search",
         BlazorFormFieldType.Color => "color",
         BlazorFormFieldType.Hidden => "hidden",
         _ => "text"

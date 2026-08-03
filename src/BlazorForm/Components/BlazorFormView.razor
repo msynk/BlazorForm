@@ -5,8 +5,12 @@
 @* novalidate: BlazorForm owns validation. Without it the browser would also enforce `pattern` and
    `maxlength` using JavaScript regex semantics, silently blocking submit with a bubble the app cannot
    style, translate or read. *@
-<form class="ff-form @(Class)" novalidate aria-busy="@(Busy ? "true" : null)"
-      @onsubmit="HandleSubmit" @onsubmit:preventDefault="true" @attributes="AdditionalAttributes">
+@* The splat comes first, exactly as it does in every input renderer: Blazor lets the last duplicate
+   attribute win, so the form's own class and submit handler override whatever the caller splatted.
+   Without that, a stray `class` would erase `ff-form` and a stray `onsubmit` would unhook validation. *@
+<form @attributes="AdditionalAttributes"
+      class="ff-form @(Class)" novalidate aria-busy="@(Working ? "true" : null)"
+      @onsubmit="HandleSubmit" @onsubmit:preventDefault="true">
     @if (!string.IsNullOrEmpty(FormState.Definition.Title))
     {
         <h2 class="ff-form__title">@FormState.Definition.Title</h2>
@@ -24,8 +28,8 @@
     }
 
     @* Messages from form-level rules belong to no single field, so they would be invisible without
-       somewhere of their own to live. *@
-    @if (FormLevelMessages.Count > 0)
+       somewhere of their own to live — unless the summary is already showing, which lists them first. *@
+    @if (FormLevelMessages.Count > 0 && !ShowErrorSummary)
     {
         <BlazorFormValidationMessages Messages="FormLevelMessages" Show="FormState.IsSubmitted" Id="ff_form_errors" />
     }
@@ -45,13 +49,20 @@
                 var index = s;
                 number++;
                 var displayNumber = number;
-                <li class="ff-stepper__step @(index == FormState.CurrentStepIndex ? "is-active" : "") @(index < FormState.CurrentStepIndex ? "is-done" : "")"
+                <li class="ff-stepper__step @(index == FormState.CurrentStepIndex ? "is-active" : "") @(index != FormState.CurrentStepIndex && index <= FormState.FurthestStepIndex ? "is-done" : "")"
                     aria-current="@(index == FormState.CurrentStepIndex ? "step" : null)">
-                    @if (AllowStepNavigation && index < FormState.CurrentStepIndex)
+                    @if (AllowStepNavigation && index != FormState.CurrentStepIndex && FormState.IsStepReachable(index))
                     {
-                        @* Only completed steps are clickable: jumping forward would skip the validation
-                           that gates each step. *@
-                        <button type="button" class="ff-stepper__link" @onclick="@(() => FormState.GoToStep(index))">
+                        @* Any step the user has already reached is clickable, forwards as well as back:
+                           each was validated on the way past, and making someone who came back to fix
+                           one answer press Next through the rest is the classic wizard annoyance. A
+                           step never reached stays inert, because jumping to it would skip the
+                           validation that gates it. *@
+                        @* Through GoTo, not GoToStep: jumping back from the stepper replaces everything
+                           below it, and without moving focus a keyboard or screen-reader user is left
+                           standing in the stepper with no indication that the step changed — the same
+                           reason Back and Next move it. *@
+                        <button type="button" class="ff-stepper__link" @onclick="@(() => GoTo(index))">
                             <span class="ff-stepper__num">@displayNumber</span>
                             <span class="ff-stepper__label">@(step.Title ?? step.Id)</span>
                         </button>
@@ -75,14 +86,7 @@
             {
                 <p class="ff-form__description">@current.Description</p>
             }
-            @foreach (var name in current.Fields)
-            {
-                var field = FormState.Definition.FindByPath(name);
-                if (field is not null)
-                {
-                    <BlazorFormFieldView State="FormState" Field="field" Path="@name" />
-                }
-            }
+            <BlazorFormFieldList State="FormState" Items="StepItems(current)" />
         </div>
 
         <div class="ff-form__actions">
@@ -111,10 +115,7 @@
     else
     {
         <div class="ff-form__body @GridClass" style="@GridStyle">
-            @foreach (var field in FormState.Definition.OrderedFields())
-            {
-                <BlazorFormFieldView State="FormState" Field="field" Path="@field.Name" />
-            }
+            <BlazorFormFieldList State="FormState" Items="RootItems" />
         </div>
 
         @if (Actions is not null)
@@ -168,6 +169,14 @@
     /// caller-supplied state manage its own <see cref="BlazorFormState.ReadOnly"/> flag.
     /// </summary>
     [Parameter] public bool? ReadOnly { get; set; }
+
+    /// <summary>
+    /// Disables every control and every button — while a save is in flight, or while the record is
+    /// locked. Unlike <see cref="ReadOnly"/> the fields cannot be tabbed through or read out, so reach
+    /// for it only when the form is genuinely inoperable. Leave it unset (null) to let a
+    /// caller-supplied state manage its own <see cref="BlazorFormState.Disabled"/> flag.
+    /// </summary>
+    [Parameter] public bool? Disabled { get; set; }
 
     [Parameter] public bool ShowSubmitButton { get; set; } = true;
 
@@ -236,10 +245,29 @@
     private object? _builtModel;
     private IDictionary<string, object?>? _builtData;
 
-    private bool Busy => FormState.IsValidating || FormState.IsSubmitting;
+    /// <summary>True while the form is actually doing something — what <c>aria-busy</c> reports.</summary>
+    private bool Working => FormState.IsValidating || FormState.IsSubmitting;
+
+    // What every button reads. A disabled form has no working buttons either, or "Submit" would stay
+    // live above a set of controls nobody can fill in. It is not, however, busy.
+    private bool Busy => Working || FormState.Disabled;
 
     /// <summary>Messages a form-level rule reported without naming a field.</summary>
     private IReadOnlyList<BlazorFormValidationMessage> FormLevelMessages => FormState.MessagesFor(string.Empty);
+
+    /// <summary>The top-level fields, each with the path it binds to.</summary>
+    private IEnumerable<(BlazorFormFieldDefinition Field, string Path)> RootItems
+        => FormState.Definition.OrderedFields().Select(f => (f, f.Name));
+
+    /// <summary>
+    /// A step's fields, resolved from the paths it names. A step that lists a field the schema does not
+    /// have renders nothing rather than throwing — <c>Definition.Validate()</c> is where that is reported.
+    /// </summary>
+    private IEnumerable<(BlazorFormFieldDefinition Field, string Path)> StepItems(BlazorFormStep step)
+        => step.Fields
+            .Select(name => (Field: FormState.Definition.FindByPath(name), Path: name))
+            .Where(x => x.Field is not null)
+            .Select(x => (x.Field!, x.Path));
 
     private string GridClass => FormState.Definition.Columns > 1 ? "ff-grid" : "";
 
@@ -292,6 +320,7 @@
     private void ApplyReadOnly()
     {
         if (ReadOnly is { } value) FormState.ReadOnly = value;
+        if (Disabled is { } disabled) FormState.Disabled = disabled;
     }
 
     private void Attach(BlazorFormState state)
@@ -360,6 +389,13 @@
     private void Previous()
     {
         FormState.PreviousStep();
+        _focusStepBody = true;
+    }
+
+    private void GoTo(int index)
+    {
+        if (index == FormState.CurrentStepIndex) return;
+        FormState.GoToStep(index);
         _focusStepBody = true;
     }
 

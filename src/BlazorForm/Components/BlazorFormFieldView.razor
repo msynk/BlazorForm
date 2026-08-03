@@ -17,7 +17,10 @@
     }
     else if (Field.Type == BlazorFormFieldType.Object)
     {
-        <fieldset class="ff-group" style="@GridStyle" disabled="@State.IsDisabled(Field, Path)">
+        @* aria-describedby, so the group's explanation is announced when focus enters it. Rendering the
+           help text without pointing at it leaves it visible but silent. *@
+        <fieldset class="ff-group" style="@GridStyle" disabled="@State.IsDisabled(Field, Path)"
+                  aria-describedby="@(string.IsNullOrEmpty(Field.HelpText) ? null : Context.HelpId)">
             @if (!string.IsNullOrEmpty(Field.Label))
             {
                 <legend class="ff-group__legend">@Field.Label</legend>
@@ -27,10 +30,7 @@
                 <p class="ff-help" id="@Context.HelpId">@Field.HelpText</p>
             }
             <div class="ff-group__body @(ChildColumns > 1 ? "ff-grid" : "")" style="@ChildGridStyle">
-                @foreach (var child in Field.Children.OrderBy(c => c.Order))
-                {
-                    <BlazorFormFieldView State="State" Field="child" Path="@BlazorFormPath.Combine(Path, child.Name)" />
-                }
+                <BlazorFormFieldList State="State" Items="ChildItems" />
             </div>
         </fieldset>
     }
@@ -110,20 +110,30 @@
 
     protected override void OnParametersSet()
     {
-        if (_context is null || !ReferenceEquals(_context.Field, Field) || _context.Path != Path
-            || !ReferenceEquals(_context.State, State))
-        {
-            _context = new BlazorFormFieldContext(State, Field, Path);
-            _params = new Dictionary<string, object> { ["Context"] = _context };
+        if (_context is not null && ReferenceEquals(_context.Field, Field) && _context.Path == Path
+            && ReferenceEquals(_context.State, State))
+            return;
 
+        var isFirstContext = _context is null;
+
+        _context = new BlazorFormFieldContext(State, Field, Path);
+        _params = new Dictionary<string, object> { ["Context"] = _context };
+
+        if (isFirstContext && !Field.IsContainer)
+        {
             // Prime the signature for the render that is about to happen. ShouldRender is not called
             // for a component's first render, so without this the first change anywhere on the form
             // would re-render every field just to establish a baseline.
-            if (!Field.IsContainer)
-            {
-                _signature = Capture();
-                _hasRendered = true;
-            }
+            _signature = Capture();
+            _hasRendered = true;
+        }
+        else
+        {
+            // The field or the path changed under a component Blazor is reusing — the row that moved up
+            // when a repeater deleted the one above it. Priming the signature here would tell
+            // ShouldRender that nothing had changed and suppress the one render that applies the new
+            // path, leaving the row rendering (and writing to) the index it used to have.
+            _hasRendered = false;
         }
     }
 
@@ -161,6 +171,7 @@
         Context.Value,
         State.MessagesFor(Path),
         State.IsLoadingOptions(Path),
+        Context.OptionsFailed,
         Context.Options.Count);
 
     /// <summary>
@@ -176,6 +187,7 @@
         object? Value,
         IReadOnlyList<BlazorFormValidationMessage> Messages,
         bool LoadingOptions,
+        bool OptionsFailed,
         int OptionCount)
     {
         public bool Equals(RenderSignature other)
@@ -185,6 +197,7 @@
                && Required == other.Required
                && ShowMessages == other.ShowMessages
                && LoadingOptions == other.LoadingOptions
+               && OptionsFailed == other.OptionsFailed
                && OptionCount == other.OptionCount
                && ReferenceEquals(Messages, other.Messages)
                && ValuesMatch(Value, other.Value);
@@ -202,6 +215,10 @@
             return a is not null && b is not null && a.Equals(b);
         }
     }
+
+    /// <summary>This object's children, each with the path it binds to.</summary>
+    private IEnumerable<(BlazorFormFieldDefinition Field, string Path)> ChildItems
+        => Field.Children.OrderBy(c => c.Order).Select(c => (c, BlazorFormPath.Combine(Path, c.Name)));
 
     private string LabelText => Field.Label ?? Field.Name;
 

@@ -16,7 +16,9 @@
         aria-describedby="@DescribedBy"
         @onchange="OnSelectionChanged"
         @onblur="OnBlur">
-    <option value="">@PlaceholderText</option>
+    @* A required select must not offer "-- Select --" back as an answer. It stays in the list because
+       it is what an empty field displays, but it cannot be chosen again. *@
+    <option value="" disabled="@Context.IsRequired">@PlaceholderText</option>
     @foreach (var group in Grouped)
     {
         @if (group.Key is null)
@@ -47,9 +49,13 @@
     // regardless of the field's update trigger — "as you type" has no meaning for a dropdown.
     private Task OnSelectionChanged(ChangeEventArgs e) => Context.SetFromStringAsync(e.Value?.ToString());
 
+    // A provider that failed leaves an empty list behind. Saying so beats an empty dropdown the user
+    // is left to interpret as "there is nothing to choose".
     private string PlaceholderText => Context.IsLoadingOptions
         ? Context.Text(BlazorFormMessageKeys.SelectLoading)
-        : Field.Placeholder ?? Context.Text(BlazorFormMessageKeys.SelectPlaceholder);
+        : Context.OptionsFailed
+            ? Context.Text(BlazorFormMessageKeys.SelectError)
+            : Field.Placeholder ?? Context.Text(BlazorFormMessageKeys.SelectPlaceholder);
 
     private IEnumerable<IGrouping<string?, BlazorFormSelectOption>> Grouped
         => Context.Options.GroupBy(o => o.Group);

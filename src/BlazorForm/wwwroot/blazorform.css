@@ -221,6 +221,15 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 .ff-group__body { display: flex; flex-direction: column; gap: var(--ff-gap); }
 .ff-group[disabled] { opacity: .6; }
 
+/* Named field groups: a run of sibling fields sharing a Group name, or [Display(GroupName = …)]. Flatter
+   than the nested-object fieldset, because a group is a visual cluster rather than a level of the data. */
+.ff-fieldgroup {
+    border: none; border-block-start: 1px solid var(--ff-border);
+    padding: .75rem 0 0; margin: .25rem 0 0; min-width: 0;
+}
+.ff-fieldgroup__legend { font-size: .8rem; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--ff-muted); padding: 0; }
+.ff-fieldgroup__body { display: flex; flex-direction: column; gap: var(--ff-gap); }
+
 /* Arrays / repeaters */
 .ff-array { display: flex; flex-direction: column; gap: .6rem; border: none; padding: 0; margin: 0; min-width: 0; }
 .ff-array__header { display: flex; align-items: center; gap: .4rem; padding: 0; font-weight: 600; }
@@ -247,9 +256,11 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
     background: var(--ff-surface); color: var(--ff-text); font-size: .9rem; font-family: inherit;
     cursor: pointer; transition: background .15s, border-color .15s;
 }
-.ff-btn:hover:not(:disabled) { background: var(--ff-surface-muted); }
+.ff-btn:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--ff-surface-muted); }
 .ff-btn:focus-visible { outline: 2px solid var(--ff-accent); outline-offset: 2px; }
-.ff-btn:disabled { opacity: .5; cursor: not-allowed; }
+/* aria-disabled looks the same as disabled but stays focusable, so a button that disables itself as a
+   result of being pressed (the repeater's reorder arrows) does not drop the user's focus. */
+.ff-btn:disabled, .ff-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 .ff-btn--primary { background: var(--ff-accent); color: var(--ff-accent-contrast); border-color: var(--ff-accent); }
 .ff-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--ff-accent) 85%, #000); }
 .ff-btn--danger { color: var(--ff-error); border-color: color-mix(in srgb, var(--ff-error) 40%, var(--ff-border)); }
@@ -293,5 +304,5 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .ff-input, .ff-btn { transition: none; }
+    .ff-input, .ff-btn, .ff-switch, .ff-switch::after { transition: none; }
 }

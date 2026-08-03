@@ -55,6 +55,9 @@ public sealed class BlazorFormFieldContext
     /// <summary>True while an asynchronous options provider is loading this field's choices.</summary>
     public bool IsLoadingOptions => State.IsLoadingOptions(Path);
 
+    /// <summary>True when this field's options provider failed; the choices are empty for a reason.</summary>
+    public bool OptionsFailed => State.OptionsError(Path) is not null;
+
     public object? Value => State.GetValue(Path);
 
     /// <summary>
@@ -164,6 +167,26 @@ public sealed class BlazorFormFieldContext
 
     /// <summary>Loads the field's options if it has a provider and they are not cached yet.</summary>
     public ValueTask EnsureOptionsAsync() => State.EnsureOptionsAsync(Field, Path);
+
+    /// <summary>
+    /// The DOM id of one option inside a radio or multi-select group.
+    /// </summary>
+    /// <remarks>
+    /// The index is part of the id, not decoration. Folding non-id characters to <c>_</c> makes
+    /// <c>en-US</c> and <c>en_US</c> the same string, and two options sharing an id leaves one
+    /// <c>&lt;label for&gt;</c> pointing at the other's control — so clicking one label ticks the wrong
+    /// box, silently.
+    /// </remarks>
+    public static string OptionId(string elementId, int index, string value)
+    {
+        var sb = new StringBuilder(elementId.Length + value.Length + 8).Append(elementId).Append('_').Append(index);
+        if (value.Length == 0) return sb.ToString();
+
+        sb.Append('_');
+        foreach (var c in value)
+            sb.Append(char.IsLetterOrDigit(c) ? c : '_');
+        return sb.ToString();
+    }
 
     /// <summary>
     /// Turns a data path into an id that is valid in HTML and safe in a CSS selector:

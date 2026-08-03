@@ -16,9 +16,10 @@
      aria-required="@AriaRequired"
      aria-invalid="@AriaInvalid"
      aria-describedby="@DescribedBy">
-    @foreach (var opt in Context.Options)
+    @for (var index = 0; index < Context.Options.Count; index++)
     {
-        var optionId = $"{Context.ElementId}_{Sanitize(opt.Value)}";
+        var opt = Context.Options[index];
+        var optionId = OptionId(index, opt.Value);
         <label class="ff-radio" for="@optionId">
             <input type="radio"
                    id="@optionId"
@@ -36,11 +37,8 @@
 @code {
     protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
 
-    // Option values become part of a DOM id, so anything that is not id-safe is folded to '_'.
-    private static string Sanitize(string value)
-        => string.Create(value.Length, value, static (span, v) =>
-        {
-            for (var i = 0; i < v.Length; i++)
-                span[i] = char.IsLetterOrDigit(v[i]) ? v[i] : '_';
-        });
+    // Option values become part of a DOM id, so anything that is not id-safe is folded to '_'. The
+    // index goes in too: folding makes "en-US" and "en_US" the same string, and two options sharing an
+    // id would leave one label pointing at the other's control.
+    private string OptionId(int index, string value) => BlazorFormFieldContext.OptionId(Context.ElementId, index, value);
 }

@@ -1,0 +1,45 @@
+@namespace BlazorForm
+
+@if (_field is not null)
+{
+    <BlazorFormFieldView State="State" Field="_field" Path="@Name" />
+}
+
+@code {
+    /// <summary>
+    /// Renders one field of a form wherever you put it, so a page can lay the form out itself —
+    /// interleaving fields with its own markup, putting two of them side by side, wrapping one in a
+    /// card — while the field keeps the schema's label, validation, conditions and accessibility wiring.
+    /// </summary>
+    /// <remarks>
+    /// Pair it with <c>ShowSubmitButton="false"</c> on a <see cref="BlazorFormView"/>, or drive a
+    /// <see cref="BlazorFormState"/> directly and supply your own <c>&lt;form&gt;</c>.
+    /// </remarks>
+
+    /// <summary>The form the field belongs to.</summary>
+    [Parameter, EditorRequired] public BlazorFormState State { get; set; } = default!;
+
+    /// <summary>
+    /// The field's path — a top-level name (<c>Email</c>), a nested one (<c>Address.City</c>) or an
+    /// element of a repeater (<c>Lines[0].Product</c>).
+    /// </summary>
+    [Parameter, EditorRequired] public string Name { get; set; } = default!;
+
+    /// <summary>
+    /// Whether an unknown path throws. Off by default, so a page that renders a field the current
+    /// schema does not have simply shows nothing — the right behaviour when the schema is chosen at
+    /// runtime. Turn it on to catch a typo in a fixed layout.
+    /// </summary>
+    [Parameter] public bool ThrowIfMissing { get; set; }
+
+    private BlazorFormFieldDefinition? _field;
+
+    protected override void OnParametersSet()
+    {
+        _field = State.Definition.FindByPath(Name);
+
+        if (_field is null && ThrowIfMissing)
+            throw new InvalidOperationException(
+                $"{nameof(BlazorFormField)}: no field named '{Name}' exists in this form's schema.");
+    }
+}

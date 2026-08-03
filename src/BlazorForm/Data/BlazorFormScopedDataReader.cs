@@ -37,14 +37,27 @@ public sealed class BlazorFormScopedDataReader : IBlazorFormDataReader
     /// <summary>The path this reader is scoped to.</summary>
     public string ScopePath => _scope;
 
-    public object? GetValue(string path)
-    {
-        // A path that already starts at the scope is used as-is, so an absolute path written inside a
-        // repeater ("Lines[0].Total") is not mangled into "Lines[0].Lines[0].Total".
-        if (string.IsNullOrEmpty(path)) return _inner.GetValue(path);
+    public object? GetValue(string path) => TryGetValue(path, out var value) ? value : null;
 
-        var scoped = _inner.GetValue(BlazorFormPath.Combine(_scope, path));
-        return scoped ?? _inner.GetValue(path);
+    /// <summary>
+    /// Resolves against the scope first, then the root.
+    /// </summary>
+    /// <remarks>
+    /// The test is whether the scoped path <em>exists</em>, not whether it holds something. A row's own
+    /// field wins even when it is empty — which is the whole point of a condition such as
+    /// <c>VisibleWhen("Email", IsEmpty)</c>. Falling back on "the scoped read came out null" let a
+    /// root-level field of the same name answer for the row, so a blank row silently reported its
+    /// neighbour's value. The fallback still catches the case it was written for: a path the row does
+    /// not have at all, which is how an absolute reference from inside a repeater keeps working.
+    /// </remarks>
+    public bool TryGetValue(string path, out object? value)
+    {
+        // An empty path means "the whole store", which no scope changes.
+        if (!string.IsNullOrEmpty(path)
+            && _inner.TryGetValue(BlazorFormPath.Combine(_scope, path), out value))
+            return true;
+
+        return _inner.TryGetValue(path, out value);
     }
 
     /// <summary>Peels off an existing scope so scopes never nest into an unreadable chain.</summary>

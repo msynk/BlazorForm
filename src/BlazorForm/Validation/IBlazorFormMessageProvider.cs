@@ -48,6 +48,9 @@ public static class BlazorFormMessageKeys
     /// <summary>Placeholder shown while an options provider is loading.</summary>
     public const string SelectLoading = "ui.select.loading";
 
+    /// <summary>Placeholder shown when an options provider failed, so an empty list is explained rather than mysterious.</summary>
+    public const string SelectError = "ui.select.error";
+
     /// <summary>Default noun for one repeater row ("item"), used to build the buttons' labels.</summary>
     public const string ArrayItem = "ui.array.item";
 
@@ -74,6 +77,12 @@ public static class BlazorFormMessageKeys
 
     /// <summary>Text shown in place of an empty repeater. Arg 0 is the item noun.</summary>
     public const string ArrayEmpty = "ui.array.empty";
+
+    /// <summary>
+    /// Accessible name of one repeater row, so a screen reader says which row a control belongs to.
+    /// Args: item noun, 1-based row number.
+    /// </summary>
+    public const string ArrayItemGroup = "ui.array.itemGroup";
 
     /// <summary>Label of the button that clears a file field's selection.</summary>
     public const string FileClear = "ui.file.clear";
@@ -113,6 +122,16 @@ public static class BlazorFormMessageKeys
 
     /// <summary>Character counter beneath a length-limited input. Args: used, limit.</summary>
     public const string CharacterCount = "ui.characters";
+
+    /// <summary>
+    /// Announced to assistive technology as a length-limited field approaches its limit. Arg 0 is the
+    /// number of characters left. The visible counter is decorative; this is what a screen-reader user
+    /// actually hears.
+    /// </summary>
+    public const string CharactersRemaining = "ui.characters.remaining";
+
+    /// <summary>Announced once a length-limited field is over its limit. Arg 0 is the excess.</summary>
+    public const string CharactersOver = "ui.characters.over";
 }
 
 /// <summary>The English defaults used when no <see cref="IBlazorFormMessageProvider"/> is registered.</summary>
@@ -144,6 +163,7 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
 
         BlazorFormMessageKeys.SelectPlaceholder => "-- Select --",
         BlazorFormMessageKeys.SelectLoading => "Loading…",
+        BlazorFormMessageKeys.SelectError => "Options could not be loaded",
         BlazorFormMessageKeys.ArrayItem => "item",
         BlazorFormMessageKeys.ArrayAdd => $"Add {Arg(args, 0)}",
         BlazorFormMessageKeys.ArrayRemove => $"Remove {Arg(args, 0)} {Arg(args, 1)}",
@@ -153,6 +173,7 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.ArrayMoveUp => $"Move {Arg(args, 0)} {Arg(args, 1)} up",
         BlazorFormMessageKeys.ArrayMoveDown => $"Move {Arg(args, 0)} {Arg(args, 1)} down",
         BlazorFormMessageKeys.ArrayEmpty => $"No {Arg(args, 0)}s yet.",
+        BlazorFormMessageKeys.ArrayItemGroup => $"{Arg(args, 0)} {Arg(args, 1)}",
         BlazorFormMessageKeys.FileClear => "Clear selection",
         BlazorFormMessageKeys.SummaryTitleOne => "There is a problem with this form:",
         BlazorFormMessageKeys.SummaryTitleMany => $"There are {Arg(args, 0)} problems with this form:",
@@ -166,6 +187,8 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.PasswordHide => "Hide password",
         BlazorFormMessageKeys.Clear => "Clear",
         BlazorFormMessageKeys.CharacterCount => $"{Arg(args, 0)} / {Arg(args, 1)}",
+        BlazorFormMessageKeys.CharactersRemaining => $"{Arg(args, 0)} characters remaining",
+        BlazorFormMessageKeys.CharactersOver => $"{Arg(args, 0)} characters over the limit",
 
         _ => key
     };

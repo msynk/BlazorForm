@@ -15,9 +15,10 @@
      aria-required="@AriaRequired"
      aria-invalid="@AriaInvalid"
      aria-describedby="@DescribedBy">
-    @foreach (var opt in Context.Options)
+    @for (var index = 0; index < Context.Options.Count; index++)
     {
-        var optionId = $"{Context.ElementId}_{Sanitize(opt.Value)}";
+        var opt = Context.Options[index];
+        var optionId = BlazorFormFieldContext.OptionId(Context.ElementId, index, opt.Value);
         <label class="ff-checkbox" for="@optionId">
             <input type="checkbox"
                    id="@optionId"
@@ -101,10 +102,4 @@
         return Context.SetValueAsync(set.ToList());
     }
 
-    private static string Sanitize(string value)
-        => string.Create(value.Length, value, static (span, v) =>
-        {
-            for (var i = 0; i < v.Length; i++)
-                span[i] = char.IsLetterOrDigit(v[i]) ? v[i] : '_';
-        });
 }

@@ -104,6 +104,17 @@ public sealed class BlazorFormFieldBuilder
     public BlazorFormFieldBuilder AsPassword() { _field.Type = BlazorFormFieldType.Password; _field.Autocomplete ??= "current-password"; return this; }
     public BlazorFormFieldBuilder AsUrl() { _field.Type = BlazorFormFieldType.Url; return this; }
     public BlazorFormFieldBuilder AsTel() { _field.Type = BlazorFormFieldType.Tel; return this; }
+
+    /// <summary>
+    /// Renders the field as a search box. Browsers give one a clear affordance, a search key on the
+    /// on-screen keyboard and history from previous searches; the value is plain text either way.
+    /// </summary>
+    public BlazorFormFieldBuilder AsSearch()
+    {
+        _field.Type = BlazorFormFieldType.Search;
+        _field.InputMode ??= "search";
+        return this;
+    }
     public BlazorFormFieldBuilder AsColor() { _field.Type = BlazorFormFieldType.Color; return this; }
     public BlazorFormFieldBuilder AsRange() { _field.Type = BlazorFormFieldType.Range; return this; }
     public BlazorFormFieldBuilder AsRadio() { _field.Type = BlazorFormFieldType.Radio; return this; }

@@ -77,5 +77,13 @@ public enum BlazorFormFieldType
     Array,
 
     /// <summary>A field rendered by a custom renderer resolved via <see cref="BlazorFormFieldDefinition.CustomRenderer"/>.</summary>
-    Custom
+    Custom,
+
+    /// <summary>
+    /// A search box. The same value as <see cref="Text"/>, but browsers give it a clear affordance, an
+    /// on-screen keyboard with a search key, and history from previous searches — none of which a plain
+    /// text box gets. Appended rather than slotted in beside <see cref="Text"/> so no existing member's
+    /// numeric value moves.
+    /// </summary>
+    Search
 }

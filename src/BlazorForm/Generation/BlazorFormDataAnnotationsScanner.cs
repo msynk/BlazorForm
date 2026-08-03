@@ -58,16 +58,35 @@ public static class BlazorFormDataAnnotationsScanner
             }
         }
 
+        // [MinLength]/[MaxLength] mean item counts on a collection, exactly as [Length] does. Mapping
+        // them to the string rule on an array field made them silently do nothing: the rule reads
+        // ctx.Value as a string, a List<T> is not one, and "at least one line" passed on an empty list.
         if (member.GetCustomAttribute<MinLengthAttribute>() is { } ml)
         {
-            field.MinLength = ml.Length;
-            field.AddValidator(new BlazorFormMinLengthRule(ml.Length, NullIfDefault(ml.ErrorMessage)));
+            if (field.Type == BlazorFormFieldType.Array)
+            {
+                field.MinItems = ml.Length;
+                field.AddValidator(new BlazorFormCollectionSizeRule(ml.Length, field.MaxItems, NullIfDefault(ml.ErrorMessage)));
+            }
+            else
+            {
+                field.MinLength = ml.Length;
+                field.AddValidator(new BlazorFormMinLengthRule(ml.Length, NullIfDefault(ml.ErrorMessage)));
+            }
         }
 
         if (member.GetCustomAttribute<MaxLengthAttribute>() is { } mxl)
         {
-            field.MaxLength = mxl.Length;
-            field.AddValidator(new BlazorFormMaxLengthRule(mxl.Length, NullIfDefault(mxl.ErrorMessage)));
+            if (field.Type == BlazorFormFieldType.Array)
+            {
+                field.MaxItems = mxl.Length;
+                field.AddValidator(new BlazorFormCollectionSizeRule(field.MinItems, mxl.Length, NullIfDefault(mxl.ErrorMessage)));
+            }
+            else
+            {
+                field.MaxLength = mxl.Length;
+                field.AddValidator(new BlazorFormMaxLengthRule(mxl.Length, NullIfDefault(mxl.ErrorMessage)));
+            }
         }
 
         // [Length(min, max)] covers both bounds, and applies to collections as well as strings.

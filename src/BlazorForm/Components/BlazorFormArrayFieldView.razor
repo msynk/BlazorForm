@@ -27,21 +27,22 @@
        it a screen-reader user presses "Add" and hears nothing at all. *@
     <p class="ff-sr-only" aria-live="polite">@Announcement</p>
 
-    @for (var index = 0; index < Count; index++)
+    @{ var keys = BuildKeys(); }
+    @for (var index = 0; index < keys.Length; index++)
     {
         var i = index;
         var itemPath = BlazorFormPath.Combine(Path, i);
         @* Keyed by the item instance where possible so reordering moves the DOM node with its data
            instead of rewriting every row's contents. *@
-        <div class="ff-array__item" @key="KeyFor(i)">
+        @* A named group, not a bare div. Every row repeats the same labels, so without one a screen
+           reader announces "Product, edit" five times over with nothing to say which line is which —
+           and the visible row number beside it is decorative. *@
+        <div class="ff-array__item" @key="keys[i]" role="group" aria-label="@State.Text(BlazorFormMessageKeys.ArrayItemGroup, ItemNoun, i + 1)">
             <div class="ff-array__item-body">
                 <span class="ff-array__item-index" aria-hidden="true">@(i + 1)</span>
                 @if (Template.Type == BlazorFormFieldType.Object)
                 {
-                    @foreach (var child in Template.Children.OrderBy(c => c.Order))
-                    {
-                        <BlazorFormFieldView State="State" Field="child" Path="@BlazorFormPath.Combine(itemPath, child.Name)" />
-                    }
+                    <BlazorFormFieldList State="State" Items="RowItems(itemPath)" />
                 }
                 else
                 {
@@ -57,25 +58,29 @@
                 }
                 @if (Reorderable)
                 {
+                    @* aria-disabled, not disabled. A `disabled` button leaves the tab order, so moving a
+                       row to the top would take the focus of the very button that moved it there and
+                       drop it on the page body — mid-reorder, which is exactly when a keyboard user can
+                       least afford to lose their place. The click is guarded instead. *@
                     <button type="button" class="ff-btn ff-btn--icon" title="@moveUp" aria-label="@moveUp"
-                            disabled="@(i == 0)" @onclick="@(() => State.MoveArrayItem(Path, i, i - 1))">↑</button>
+                            aria-disabled="@(i == 0 ? "true" : null)" @onclick="@(() => Move(i, i - 1))">↑</button>
                     <button type="button" class="ff-btn ff-btn--icon" title="@moveDown" aria-label="@moveDown"
-                            disabled="@(i == Count - 1)" @onclick="@(() => State.MoveArrayItem(Path, i, i + 1))">↓</button>
+                            aria-disabled="@(i == keys.Length - 1 ? "true" : null)" @onclick="@(() => Move(i, i + 1))">↓</button>
                 }
                 @if (Duplicable)
                 {
                     <button type="button" class="ff-btn ff-btn--icon" title="@duplicate" aria-label="@duplicate"
-                            disabled="@(!CanAdd)" @onclick="@(() => State.DuplicateArrayItem(Field, Path, i))">⧉</button>
+                            disabled="@(!CanAdd)" @onclick="@(() => Duplicate(i))">⧉</button>
                 }
                 @* Short visible text, full accessible name: a screen reader needs to know *which* row
                    the button removes, a sighted user can see it. *@
                 <button type="button" class="ff-btn ff-btn--danger" title="@remove" aria-label="@remove"
-                        disabled="@(!CanRemove)" @onclick="@(() => State.RemoveArrayItem(Path, i))">@RemoveText</button>
+                        disabled="@(!CanRemove)" @onclick="@(() => Remove(i))">@RemoveText</button>
             </div>
         </div>
     }
 
-    <button type="button" class="ff-btn ff-btn--add" disabled="@(!CanAdd)" @onclick="Add">
+    <button type="button" class="ff-btn ff-btn--add" @ref="_addButton" disabled="@(!CanAdd)" @onclick="Add">
         @State.Text(BlazorFormMessageKeys.ArrayAdd, ItemNoun)
     </button>
 
@@ -153,15 +158,115 @@
         }
     }
 
+    /// <summary>The fields of one row, each with the path it binds to.</summary>
+    private IEnumerable<(BlazorFormFieldDefinition Field, string Path)> RowItems(string itemPath)
+        => Template.Children.OrderBy(c => c.Order).Select(c => (c, BlazorFormPath.Combine(itemPath, c.Name)));
+
     /// <summary>
-    /// Prefers the item's own identity as the render key. Value-type and null elements fall back to the
-    /// index, which is all Blazor can distinguish them by.
+    /// The render key of every row, computed once per render.
     /// </summary>
-    private object KeyFor(int index)
+    /// <remarks>
+    /// The item's own identity is preferred, so reordering moves the DOM node with its data instead of
+    /// rewriting every row. Value types, strings and nulls fall back to the index — Blazor cannot tell
+    /// two equal ones apart — and so does any instance already used: a list may legitimately hold the
+    /// same object twice, and a duplicate <c>@key</c> is an exception, not a rendering quirk.
+    /// </remarks>
+    private object[] BuildKeys()
     {
-        var item = State.GetValue(BlazorFormPath.Combine(Path, index));
-        return item is null || item.GetType().IsValueType || item is string ? index : item;
+        var count = Count;
+        var keys = new object[count];
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        for (var i = 0; i < count; i++)
+        {
+            var item = State.GetValue(BlazorFormPath.Combine(Path, i));
+            keys[i] = item is null || item is string || item.GetType().IsValueType || !seen.Add(item)
+                ? i
+                : item;
+        }
+        return keys;
     }
 
-    private void Add() => State.AddArrayItem(Field, Path);
+    // ------------------------------------------------------------------ focus
+    //
+    // Pressing a button that removes the element containing it leaves focus nowhere: the browser drops
+    // it on <body>, so a keyboard user is silently returned to the top of the page and a screen-reader
+    // user loses their place entirely. Every row operation therefore says where focus should land, and
+    // the next render puts it there.
+
+    private ElementReference _addButton;
+    private int? _focusRow;
+    private bool _focusAdd;
+
+    private void Add()
+    {
+        var index = State.AddArrayItem(Field, Path);
+        if (index >= 0) _focusRow = index;
+    }
+
+    /// <summary>
+    /// Moves a row, ignoring a request that would take it past either end. The buttons at the ends are
+    /// only <c>aria-disabled</c>, so they can still be pressed; this is where that is made harmless.
+    /// The DOM node moves with the row (it is keyed by the item), so focus follows it without help.
+    /// </summary>
+    private void Move(int from, int to)
+    {
+        if (to < 0 || to >= Count) return;
+        State.MoveArrayItem(Path, from, to);
+    }
+
+    private void Duplicate(int index)
+    {
+        var target = State.DuplicateArrayItem(Field, Path, index);
+        if (target >= 0) _focusRow = target;
+    }
+
+    private void Remove(int index)
+    {
+        State.RemoveArrayItem(Path, index);
+
+        // The row that moved up into the gap is where the user was looking; when the list empties, the
+        // only thing left to aim at is the button that refills it.
+        if (Count == 0) _focusAdd = true;
+        else _focusRow = Math.Min(index, Count - 1);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusRow is { } row)
+        {
+            _focusRow = null;
+            foreach (var path in RowFocusOrder(row))
+                if (await State.FocusAsync(path)) return;
+
+            // Nothing in the row would take focus — every field hidden, or all custom renderers with
+            // no focusable element. Better the add button than nowhere at all.
+            _focusAdd = true;
+        }
+
+        if (!_focusAdd) return;
+        _focusAdd = false;
+        try
+        {
+            await _addButton.FocusAsync();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JSDisconnectedException or ObjectDisposedException)
+        {
+            // Static prerender, or the repeater went away between the click and the render.
+        }
+    }
+
+    /// <summary>The paths to try when focusing a row, best first.</summary>
+    private IEnumerable<string> RowFocusOrder(int row)
+    {
+        var itemPath = BlazorFormPath.Combine(Path, row);
+        if (Template.Type != BlazorFormFieldType.Object)
+        {
+            yield return itemPath;
+            yield break;
+        }
+
+        foreach (var child in Template.Children.OrderBy(c => c.Order))
+            yield return BlazorFormPath.Combine(itemPath, child.Name);
+    }
 }

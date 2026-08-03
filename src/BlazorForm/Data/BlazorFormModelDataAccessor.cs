@@ -42,6 +42,44 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
         return current;
     }
 
+    /// <summary>
+    /// Reads a path, reporting whether it exists on the model at all. A property that is null and a
+    /// property that does not exist both read as null through <see cref="GetValue"/>; only this can
+    /// tell them apart, which is what lets a scoped read know whether a row really owns the field.
+    /// </summary>
+    public bool TryGetValue(string path, out object? value)
+    {
+        value = null;
+        var segments = BlazorFormPath.Parse(path);
+        if (segments.Count == 0)
+        {
+            value = Root;
+            return true;
+        }
+
+        object? current = Root;
+        foreach (var seg in segments)
+        {
+            // The path continues past something that is not there, so it cannot be resolved.
+            if (current is null) return false;
+
+            if (seg.IsIndex)
+            {
+                if (current is not IList list || seg.Index < 0 || seg.Index >= list.Count) return false;
+                current = list[seg.Index];
+                continue;
+            }
+
+            var prop = FindProperty(current.GetType(), seg.Name!);
+            if (prop is null || !prop.CanRead) return false;
+            try { current = prop.GetValue(current); }
+            catch (TargetInvocationException) { return false; }
+        }
+
+        value = current;
+        return true;
+    }
+
     public void SetValue(string path, object? value)
     {
         LastWriteFailed = false;

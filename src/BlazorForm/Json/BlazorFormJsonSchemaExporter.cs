@@ -127,6 +127,25 @@ public static class BlazorFormJsonSchemaExporter
             writer.WriteStartArray();
             foreach (var o in field.Options) writer.WriteStringValue(o.Label);
             writer.WriteEndArray();
+
+            // An option's group (the <optgroup> it sits in) and its disabled flag have no JSON Schema
+            // vocabulary, so they travel alongside enumNames rather than being dropped on export — a
+            // grouped country list that came back flat would be a worse form than the one exported.
+            if (field.Options.Any(o => o.Group is not null))
+            {
+                writer.WritePropertyName("x-enumGroups");
+                writer.WriteStartArray();
+                foreach (var o in field.Options) writer.WriteStringValue(o.Group);
+                writer.WriteEndArray();
+            }
+
+            if (field.Options.Any(o => o.Disabled))
+            {
+                writer.WritePropertyName("x-enumDisabled");
+                writer.WriteStartArray();
+                foreach (var o in field.Options.Where(o => o.Disabled)) WriteOptionValue(writer, o.Value, jsonType);
+                writer.WriteEndArray();
+            }
         }
 
         if (field.DefaultValue is not null)
@@ -152,6 +171,7 @@ public static class BlazorFormJsonSchemaExporter
     private static void WriteUiMetadata(Utf8JsonWriter writer, BlazorFormFieldDefinition field)
     {
         if (field.Placeholder is not null) writer.WriteString("x-placeholder", field.Placeholder);
+        if (field.Group is not null) writer.WriteString("x-group", field.Group);
         if (field.Order != 0) writer.WriteNumber("x-order", field.Order);
         if (field.Autocomplete is not null) writer.WriteString("x-autocomplete", field.Autocomplete);
         if (field.InputMode is not null) writer.WriteString("x-inputMode", field.InputMode);
@@ -276,6 +296,7 @@ public static class BlazorFormJsonSchemaExporter
         BlazorFormFieldType.Radio => ("string", null, "radio"),
         BlazorFormFieldType.MultiSelect => ("array", null, "multiselect"),
         BlazorFormFieldType.Tel => ("string", null, "tel"),
+        BlazorFormFieldType.Search => ("string", null, "search"),
         BlazorFormFieldType.File => ("string", "binary", "file"),
         BlazorFormFieldType.Hidden => ("string", null, "hidden"),
         BlazorFormFieldType.Static => ("null", null, "static"),

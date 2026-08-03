@@ -128,6 +128,14 @@ public sealed class BlazorFormDefinition
             }
         }
 
+        // Two fields both asking for focus is a race the schema cannot win: whichever renders last
+        // takes it, so the answer changes with the layout rather than with the author's intent.
+        var autofocused = AllFields().Where(f => f.Autofocus).Select(f => f.Name).ToList();
+        if (autofocused.Count > 1)
+            diagnostics.Add(new BlazorFormSchemaDiagnostic(autofocused[0],
+                $"{autofocused.Count} fields are marked Autofocus ({string.Join(", ", autofocused)}); only one can win.",
+                BlazorFormSchemaDiagnosticSeverity.Warning));
+
         var duplicateSteps = Steps.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1);
         foreach (var group in duplicateSteps)
             diagnostics.Add(new BlazorFormSchemaDiagnostic(string.Empty,
@@ -165,6 +173,29 @@ public sealed class BlazorFormDefinition
                     "A choice field has neither options nor an options provider; it will render an empty list.",
                     BlazorFormSchemaDiagnosticSeverity.Warning));
 
+            // The provider always wins, so the static list is never rendered — but it is still there in
+            // the schema, and reading it is the natural way to be wrong about what the field offers.
+            if (field.OptionsProvider is not null && field.Options.Count > 0)
+                into.Add(new BlazorFormSchemaDiagnostic(path,
+                    "A field has both static options and an options provider; the provider wins and the static list is never shown.",
+                    BlazorFormSchemaDiagnosticSeverity.Warning));
+
+            // Bounds that cross over describe a field no value can satisfy, so the form can never be
+            // submitted and nothing on the page says why. Almost always a transposed pair of arguments.
+            CheckBounds(field.MinLength, field.MaxLength, "MinLength", "MaxLength", path, into);
+            CheckBounds(field.MinItems, field.MaxItems, "MinItems", "MaxItems", path, into);
+            CheckBounds(field.Min, field.Max, "Min", "Max", path, into);
+
+            if (field.Computed is not null && !field.ReadOnly)
+                into.Add(new BlazorFormSchemaDiagnostic(path,
+                    "A computed field is editable, so anything typed into it is overwritten the next time a dependency changes.",
+                    BlazorFormSchemaDiagnosticSeverity.Warning));
+
+            // A confirm-password rule pointing at nothing is silently satisfied: the other value reads
+            // as null, this one is compared against it, and the field passes for the wrong reason.
+            foreach (var compare in field.Validators.OfType<BlazorFormCompareRule>())
+                CheckPaths([compare.OtherPath], path, "MatchesField", into);
+
             CheckPaths(field.VisibleWhen?.Dependencies, path, "VisibleWhen", into);
             CheckPaths(field.DisabledWhen?.Dependencies, path, "DisabledWhen", into);
             CheckPaths(field.RequiredWhen?.Dependencies, path, "RequiredWhen", into);
@@ -193,6 +224,14 @@ public sealed class BlazorFormDefinition
                     Walk(template, itemPath, into, seen);
                 }
             }
+        }
+
+        static void CheckBounds<T>(T? min, T? max, string minName, string maxName, string path,
+            List<BlazorFormSchemaDiagnostic> into) where T : struct, IComparable<T>
+        {
+            if (min is { } lo && max is { } hi && lo.CompareTo(hi) > 0)
+                into.Add(new BlazorFormSchemaDiagnostic(path,
+                    $"{minName} ({lo}) is greater than {maxName} ({hi}); no value can satisfy both."));
         }
 
         void CheckPaths(IEnumerable<string>? paths, string owner, string what, List<BlazorFormSchemaDiagnostic> into)

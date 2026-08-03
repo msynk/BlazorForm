@@ -13,7 +13,12 @@ public static class BlazorFormConditionEvaluator
         BlazorFormConditionOperator.IsEmpty => IsEmpty(actual),
         BlazorFormConditionOperator.IsNotEmpty => !IsEmpty(actual),
         BlazorFormConditionOperator.IsTrue => AsBool(actual) == true,
-        BlazorFormConditionOperator.IsFalse => AsBool(actual) == false,
+        // An unanswered checkbox is not true, and for a yes/no question there is nothing else it can
+        // be. Reading a missing value as neither true nor false hid a field under *both* branches of
+        // the same question — which a dictionary-backed form met immediately, since an untouched
+        // checkbox has no entry at all while a `bool` on a typed model already reads false.
+        // A non-empty value that is not a boolean is still neither.
+        BlazorFormConditionOperator.IsFalse => AsBool(actual) == false || IsEmpty(actual),
         BlazorFormConditionOperator.Equals => LooseEquals(actual, expected),
         BlazorFormConditionOperator.NotEquals => !LooseEquals(actual, expected),
         BlazorFormConditionOperator.GreaterThan => TryCompare(actual, expected, out var g) && g > 0,

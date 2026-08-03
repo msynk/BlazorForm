@@ -8,6 +8,48 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Named field groups** — a run of consecutive fields sharing a `Group(...)` name (or
+  `[Display(GroupName = …)]`) renders as one `<fieldset>` with a `<legend>`, so the grouping exists for
+  a screen reader as well as for the eye. The name round-trips through JSON as `x-group`.
+- **`<BlazorFormField State="…" Name="…" />`** — places one field of a schema wherever the page wants
+  it, so the layout can be the page's while labels, validation, conditions and the ARIA wiring stay the
+  schema's.
+- **`BlazorFormState.ResetField(path)`** — puts one field, and anything nested beneath it, back to the
+  value it started with. `Reset()` is far too blunt when the user changed their mind about one answer.
+- **Options failures are survivable** — `BlazorFormState.OptionsError(path)` and the
+  `OptionsLoadFailed` event report a provider that threw, and the control says so instead of showing an
+  empty dropdown. Previously the exception escaped into the renderer's `OnParametersSetAsync` and took
+  the component down.
+- **The character counter is announced.** The visible counter stays `aria-hidden`, and a polite live
+  region announces the remaining count as the limit comes into view (threshold configurable with
+  `Attr("countAnnounceAt", n)`). Without it a screen-reader user met the limit by having their typing
+  silently stop working.
+- `Definition.Validate()` reports more than one field asking for `Autofocus`, which is a race the
+  schema cannot win; bounds that cross over (`Range(10, 5)`, `Items(min: 4, max: 2)`), which describe a
+  field no value can satisfy; and a computed field left editable, whose input is overwritten the next
+  time a dependency changes.
+- **`BlazorFormState.Disabled` / `BlazorFormView.Disabled`** — disables every control and every button
+  at once, for a save in flight or a locked record. Distinct from `ReadOnly`, which stays focusable and
+  readable, and it does not claim the form is `aria-busy`.
+- **Repeater focus management** — adding, duplicating or removing a row moves focus somewhere sensible
+  (into the new row, into the row that took a deleted one's place, or onto the add button when the list
+  empties) instead of leaving it on `<body>`.
+- **`IBlazorFormDataReader.TryGetValue`** — reports whether a path exists, as distinct from whether it
+  holds anything. A default implementation keeps existing readers working.
+- An option's `Group` (its `<optgroup>`) and `Disabled` flag round-trip through JSON as `x-enumGroups`
+  and `x-enumDisabled`, instead of being dropped on export.
+- **`BlazorFormState.FurthestStepIndex` / `IsStepReachable(index)`** — the stepper now offers every step
+  the user has already walked past, forwards as well as back. Coming back to fix one answer no longer
+  means pressing Next through the rest of the wizard.
+- **`BlazorFormFieldType.Search` / `AsSearch()`** — browsers give a search box a clear affordance, a
+  search key on the on-screen keyboard and history from previous searches. The member is appended to
+  the enum, so no existing one's numeric value moves.
+- `Definition.Validate()` reports a `MatchesField` pointing at a path that is not in the schema. The
+  other value reads as null, this one is compared against it, and the field passes for the wrong reason.
+- **Each repeater row is a named group.** Every row repeats the same field labels, so a screen reader
+  announced "Product, edit" once per line with nothing to tell them apart; the row now carries an
+  accessible name ("line 2") through the message provider.
+
 - **Live updates and debouncing** — `UpdateOnInput(debounceMilliseconds)` writes the value as the user
   types instead of on blur. The `input` handler is only wired when a field actually needs it, so a
   change-driven field still costs no round-trip per keystroke on a Blazor Server circuit.
@@ -63,6 +105,61 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **An unanswered checkbox now counts as false.** `IsTrue` and `IsFalse` were both false for a missing
+  value, so the two branches of one yes/no question could hide a field under each — which a
+  dictionary-backed form met immediately, since an untouched checkbox has no entry at all while a
+  `bool` on a typed model already reads false. A non-empty value that is not a boolean is still
+  neither.
+- **Two options whose values differ only in punctuation no longer share a DOM id.** Folding
+  non-id characters to `_` made `en-US` and `en_US` the same id, so one `<label for>` pointed at the
+  other's control and clicking a label ticked the wrong box.
+- **A repeater's reorder arrows no longer drop focus.** Moving a row to either end disabled the very
+  button that moved it, and a `disabled` button leaves the tab order — so a keyboard user was returned
+  to the page body mid-reorder. They are `aria-disabled` now, and the click is guarded instead.
+- **Clicking a completed step in the stepper moves focus to that step's content**, as Back and Next
+  already did. Without it the content below is replaced with no indication that anything happened.
+- **Deleting a repeater row no longer leaves the rows below it bound to the wrong index.** The
+  render-skip optimisation compares what a field *displays*, which does not include the path it
+  displays it from — so a row Blazor reused at a new index looked unchanged, the render that would
+  apply the new path was suppressed, and the surviving rows carried on rendering (and writing to) the
+  indices they used to have. The last row bound to an element that no longer existed. The same applied
+  to an insert anywhere but the end.
+- **`[MinLength]` / `[MaxLength]` on a collection are enforced.** They mean item counts, exactly as
+  `[Length]` does, but were mapped to the string rule — which reads the value as a string, finds a
+  `List<T>`, and passes. `[MinLength(1)]` on a list silently allowed an empty one.
+- **A row's own empty field is no longer answered for by a root field of the same name.** A scoped read
+  fell back to the root whenever the scoped value came out null, so `VisibleWhen("Email", IsEmpty)`
+  inside a repeater read the model's top-level `Email` for any row that had not filled one in. The
+  fallback now triggers on the path being absent rather than the value being empty, so the case it was
+  written for — an absolute reference from inside a row — still works.
+- **A field with a live character counter no longer carries `maxlength`.** The attribute is
+  destructive: pasting a slightly-too-long answer silently truncated it, with no message and nothing to
+  undo, which is the opposite of what showing a count is for.
+- A range input with an affix announces `aria-valuetext` ("70 kg"), not just the bare number.
+- **Dirtiness is a comparison, not a flag.** Every write marked its field dirty and nothing ever
+  cleared it, so typing a character and deleting it again left the form reporting unsaved work — and an
+  undo button, an unsaved-changes prompt and a disabled save button all read that. Values are now
+  compared against the baseline, as `dirtyFields` is in React Hook Form and TanStack Form, so a row
+  added and removed again also leaves the list clean.
+- **Cascading options match their dependencies the way everything else does.** `OptionsFrom(...,
+  dependsOn: "Country")` compared paths for exact equality, so a cascading select inside a repeater
+  row never reloaded (its sibling is `Rows[0].Country`, not `Country`) and naming a container never
+  fired. Dependencies now resolve relative to the owning object and by prefix, matching conditions and
+  computed values — and matching what the README already claimed.
+- **`ValidateStepAsync` supersedes older runs.** Unlike `ValidateAsync` it had no cancellation and did
+  not raise `IsValidating`, so two quick "Next" clicks could let a stale verdict land last and the
+  buttons stayed enabled while a step's async rules ran.
+- **The `<form>` splats caller attributes first**, as every input renderer already did. Splatting last
+  let a caller-supplied `class` erase `ff-form` and a stray `onsubmit` unhook validation.
+- **A form-level message leads the error summary, and appears once.** It sorted below every field error
+  despite naming no control, and was rendered a second time in the view's own form-level block.
+- **A repeater whose list holds the same object twice no longer throws.** The row's identity was used
+  as its `@key` unconditionally, and a duplicate key is an exception rather than a rendering quirk.
+- **A required `<select>` no longer offers its placeholder back as an answer.**
+- **A nested object group's help text is announced with the group** — it was rendered with an id that
+  nothing pointed `aria-describedby` at, leaving it visible but silent.
+- **`Group` is no longer dead API.** It was declared, documented and populated from
+  `[Display(GroupName = …)]`, and never rendered.
 - **A file property no longer generates a text box.** `IBrowserFile`, `Stream` and collections of
   either fell through the type resolver to `Text`; they now resolve to a file field, with a collection
   becoming one multi-file control rather than a repeater of file pickers.

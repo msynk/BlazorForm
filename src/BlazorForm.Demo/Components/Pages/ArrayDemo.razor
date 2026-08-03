@@ -12,10 +12,28 @@
         <em>Total</em> below is a <strong>computed field</strong>: the schema derives it from the lines,
         so no page code keeps it in sync.
     </p>
+    <p>
+        Try it with the keyboard. Adding a line puts the caret in it; removing one moves the caret to
+        the line that took its place, or to the add button when the last one goes — rather than
+        dropping it on the page body, which is where a button that deletes itself normally leaves you.
+    </p>
 </div>
 
 <div class="demo-card">
-    <BlazorFormView State="_state" OnValidSubmit="HandleSubmit" SubmitText="Save invoice" ShowErrorSummary="true" />
+    <BlazorFormView State="_state" OnValidSubmit="HandleSubmit" SubmitText="Save invoice"
+                    ShowErrorSummary="true" Disabled="_locked" />
+</div>
+
+<div class="demo-card" style="margin-top:1rem;">
+    <label style="display:flex;gap:.5rem;align-items:center;font-size:.9rem;">
+        <input type="checkbox" checked="@_locked" @onchange="@(e => _locked = e.Value is bool b && b)" />
+        Lock the invoice (<code>Disabled</code>)
+    </label>
+    <p style="color:#64748b;font-size:.82rem;margin:.4rem 0 0;">
+        <code>Disabled</code> makes the form inoperable — every control and button, the repeater's
+        buttons included. It is deliberately not the same as <code>ReadOnly</code>, which keeps the
+        fields focusable and readable for a review screen.
+    </p>
 </div>
 
 @if (_submitted)
@@ -72,6 +90,7 @@
     private readonly Invoice _model = new();
     private BlazorFormState _state = default!;
     private bool _submitted;
+    private bool _locked;
     private string _json = "";
 
     protected override void OnInitialized()

@@ -50,6 +50,41 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
         return current;
     }
 
+    /// <summary>
+    /// Reads a path, reporting whether the key is present at all — as distinct from present and null,
+    /// which is a value the store can legitimately hold.
+    /// </summary>
+    public bool TryGetValue(string path, out object? value)
+    {
+        value = null;
+        object? current = _root;
+
+        foreach (var seg in BlazorFormPath.Parse(path))
+        {
+            if (seg.IsIndex)
+            {
+                if (current is not IList list || seg.Index < 0 || seg.Index >= list.Count) return false;
+                current = list[seg.Index];
+            }
+            else if (current is IDictionary<string, object?> dict)
+            {
+                if (!dict.TryGetValue(seg.Name!, out current)) return false;
+            }
+            else if (current is IDictionary untyped)
+            {
+                if (!untyped.Contains(seg.Name!)) return false;
+                current = untyped[seg.Name!];
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        value = current;
+        return true;
+    }
+
     public void SetValue(string path, object? value)
     {
         LastWriteFailed = false;

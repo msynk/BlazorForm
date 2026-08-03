@@ -117,6 +117,43 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
     protected int DisplayLength => _liveLength ?? Context.StringValue.Length;
 
     /// <summary>
+    /// The value for the HTML <c>maxlength</c> attribute, or null when the limit should be shown rather
+    /// than enforced.
+    /// </summary>
+    /// <remarks>
+    /// A field with a live counter deliberately drops it. <c>maxlength</c> is destructive: pasting a
+    /// slightly-too-long answer silently truncates it, with no message and nothing to undo. A counter
+    /// plus the length rule is the non-destructive equivalent — the user keeps their text, sees the
+    /// count go red, and edits it down. This is why GOV.UK's character count removes the attribute too.
+    /// </remarks>
+    protected int? MaxLengthAttribute => Field.ShowCharacterCount ? null : Field.MaxLength;
+
+    /// <summary>
+    /// What a polite live region should say about the character limit, or null when it should stay
+    /// silent. The visible counter is <c>aria-hidden</c> — a number re-announced on every keystroke
+    /// would bury everything else — but leaving assistive technology with nothing at all means a
+    /// screen-reader user meets the limit by having their typing stop working. So the count is
+    /// announced only as the limit comes into view, and again once it is passed.
+    /// </summary>
+    /// <remarks>
+    /// The threshold defaults to a tenth of the limit (at least five characters) and can be set per
+    /// field with <c>Attr("countAnnounceAt", 25)</c>.
+    /// </remarks>
+    protected string? CharacterCountAnnouncement
+    {
+        get
+        {
+            if (!Field.ShowCharacterCount || Field.MaxLength is not { } max || max <= 0) return null;
+
+            var remaining = max - DisplayLength;
+            if (remaining < 0) return Context.Text(BlazorFormMessageKeys.CharactersOver, -remaining);
+
+            var threshold = Math.Max(1, Attr("countAnnounceAt", Math.Max(5, max / 10)));
+            return remaining <= threshold ? Context.Text(BlazorFormMessageKeys.CharactersRemaining, remaining) : null;
+        }
+    }
+
+    /// <summary>
     /// Writes the value once the user pauses. A newer keystroke supersedes the pending write, so a
     /// debounced field performs one write per pause instead of one per character — the difference
     /// between a remote uniqueness check that is usable and one that is not.

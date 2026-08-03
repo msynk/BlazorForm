@@ -191,6 +191,34 @@ public class ContactEntry
     public string? Address { get; set; }
 }
 
+/// <summary>
+/// Model for the composition demo: named groups, a page-owned layout, per-field undo and an options
+/// provider that is allowed to fail.
+/// </summary>
+public class SupportTicket
+{
+    [Required, Display(Name = "Your name", GroupName = "Who you are")]
+    public string ReporterName { get; set; } = "";
+
+    [Required, EmailAddress, Display(Name = "Email", GroupName = "Who you are")]
+    public string ReporterEmail { get; set; } = "";
+
+    [Display(Name = "Team", GroupName = "Where it belongs")]
+    public string? Team { get; set; }
+
+    [Display(Name = "Component", GroupName = "Where it belongs")]
+    public string? Component { get; set; }
+
+    [Display(Name = "Related ticket")]
+    public string? RelatedTicket { get; set; }
+
+    [Required, Display(Name = "Subject")]
+    public string Subject { get; set; } = "";
+
+    [Display(Name = "What happened?")]
+    public string Details { get; set; } = "";
+}
+
 /// <summary>Stand-in for a repository the demo's async rules and option providers call.</summary>
 public sealed class DemoDirectory
 {
@@ -222,5 +250,28 @@ public sealed class DemoDirectory
     {
         await Task.Delay(400, ct);
         return !TakenUsernames.Contains(username, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static IReadOnlyList<BlazorFormSelectOption> Teams =>
+    [
+        new("platform", "Platform"), new("billing", "Billing"), new("mobile", "Mobile")
+    ];
+
+    /// <summary>
+    /// A lookup that fails on demand, so the composition demo can show what a form does when the
+    /// service behind a dropdown is down — which is the interesting case, and the one nobody demos.
+    /// </summary>
+    public async ValueTask<IEnumerable<string>> GetComponentsAsync(string? team, bool fail, CancellationToken ct = default)
+    {
+        await Task.Delay(300, ct);
+        if (fail) throw new InvalidOperationException("The component service is unavailable.");
+
+        return team switch
+        {
+            "platform" => ["API", "Scheduler", "Auth"],
+            "billing" => ["Invoicing", "Payments"],
+            "mobile" => ["iOS app", "Android app"],
+            _ => []
+        };
     }
 }

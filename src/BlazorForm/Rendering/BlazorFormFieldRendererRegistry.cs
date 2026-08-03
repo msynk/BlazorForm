@@ -16,6 +16,7 @@ public sealed class BlazorFormFieldRendererRegistry : IBlazorFormFieldRendererRe
         Register(BlazorFormFieldType.Password, typeof(BlazorFormTextInput));
         Register(BlazorFormFieldType.Url, typeof(BlazorFormTextInput));
         Register(BlazorFormFieldType.Tel, typeof(BlazorFormTextInput));
+        Register(BlazorFormFieldType.Search, typeof(BlazorFormTextInput));
         Register(BlazorFormFieldType.Color, typeof(BlazorFormTextInput));
         Register(BlazorFormFieldType.Hidden, typeof(BlazorFormTextInput));
         Register(BlazorFormFieldType.TextArea, typeof(BlazorFormTextAreaInput));
