@@ -23,6 +23,15 @@ public sealed class BlazorFormState : IDisposable
 
     private readonly bool _hasClearOnHide;
     private readonly bool _hasComputed;
+    private readonly bool _hasChangeHandlers;
+
+    // Handlers write values, and those writes are changes too. Bounded so a pair that answer each other
+    // settles rather than recursing, exactly as a cycle of computed formulas does.
+    private int _changeHandlerDepth;
+
+    // Nothing that happens while the constructor runs is the user changing the form, so handlers stay
+    // silent through defaults, seeding and the first computed pass.
+    private readonly bool _initialised;
     private CancellationTokenSource? _formValidationCts;
     private bool _readOnly;
     private bool _disabled;
@@ -36,11 +45,14 @@ public sealed class BlazorFormState : IDisposable
         // Checked once: these sweeps run after every value change, and most schemas use neither.
         _hasClearOnHide = definition.AllFields().Any(f => f.ClearOnHide);
         _hasComputed = definition.AllFields().Any(f => f.Computed is not null);
+        _hasChangeHandlers = definition.AllFields().Any(f => f.OnChanged is not null);
 
         ApplyDefaults();
         SeedRequiredArrayItems();
         RecomputeValues(changedPath: null);
         CaptureInitialValues();
+
+        _initialised = true;
 
         // Seeding the form is not the user changing it. Without this a schema with any computed field
         // reports IsFormDirty the instant it is constructed, so an "undo" button bound to it is enabled
@@ -103,6 +115,21 @@ public sealed class BlazorFormState : IDisposable
     /// </summary>
     public BlazorFormValidationTrigger RevalidationTrigger { get; set; } = BlazorFormValidationTrigger.OnChange;
 
+    /// <summary>
+    /// When true, a field shows only its first error at a time instead of every rule it currently
+    /// breaks — React Hook Form's <c>criteriaMode: "firstError"</c>, which is its default.
+    /// </summary>
+    /// <remarks>
+    /// This is about what the user reads, not about what runs: every rule is still evaluated, so
+    /// <see cref="IsValid"/> and the submit decision are unchanged. A password that is too short,
+    /// missing a digit and missing a symbol otherwise stacks three complaints under one box, which
+    /// reads as three problems rather than one field to go and fix. Warnings are unaffected — they
+    /// sit alongside the error rather than competing with it. Off by default, because showing
+    /// everything at once is what this library has always done and telling the user only half of
+    /// what is wrong is a choice, not an improvement.
+    /// </remarks>
+    public bool SingleErrorPerField { get; set; }
+
     /// <summary>Index of the active wizard step (ignored for non-wizard forms).</summary>
     public int CurrentStepIndex { get; private set; }
 
@@ -159,7 +186,7 @@ public sealed class BlazorFormState : IDisposable
 
     /// <summary>
     /// True once a full validation pass has run at least once, so <see cref="IsValid"/> reflects a real
-    /// verdict rather than the absence of one. Reset by <see cref="Reset"/>.
+    /// verdict rather than the absence of one. Reset by <see cref="Reset()"/>.
     /// </summary>
     public bool HasValidated { get; private set; }
 
@@ -248,12 +275,40 @@ public sealed class BlazorFormState : IDisposable
 
         // Side effects first, so a listener sees the form in its settled state.
         ClearHiddenValues(path);
+        RunChangeHandler(path);
         RecomputeValues(path);
         InvalidateDependentOptions(path);
         // The answer just given may have hidden the step the user is standing on.
         ClampStep();
         FieldChanged?.Invoke(path);
         NotifyChanged();
+    }
+
+    /// <summary>
+    /// Runs the schema's own change handler for <paramref name="path"/>, if it has one.
+    /// </summary>
+    /// <remarks>
+    /// A handler writes values, and those writes come back through <see cref="Write"/> and can reach
+    /// handlers of their own. The depth is bounded so two fields that answer each other settle instead
+    /// of recursing, on the same principle as a cycle of computed formulas — and a handler is never run
+    /// while the form is still being constructed, because applying a default is not a change the user
+    /// made.
+    /// </remarks>
+    private void RunChangeHandler(string path)
+    {
+        const int maxDepth = 4;
+        if (!_hasChangeHandlers || !_initialised || _changeHandlerDepth >= maxDepth) return;
+        if (Definition.FindByPath(path)?.OnChanged is not { } handler) return;
+
+        _changeHandlerDepth++;
+        try
+        {
+            handler(new BlazorFormChangeContext(this, path, BlazorFormPath.Parent(path)));
+        }
+        finally
+        {
+            _changeHandlerDepth--;
+        }
     }
 
     /// <summary>
@@ -270,7 +325,9 @@ public sealed class BlazorFormState : IDisposable
         const int maxCascade = 8;
         if (!_hasComputed || depth > maxCascade) return;
 
-        foreach (var (field, path) in EnumerateFieldPaths())
+        // Materialised before the loop: writing a computed value runs the same side-effect sweeps a
+        // typed-in one does, and those mutate the data the walk is reading.
+        foreach (var (field, path) in EnumerateFieldPaths().ToList())
         {
             if (field.Computed is null) continue;
 
@@ -284,6 +341,17 @@ public sealed class BlazorFormState : IDisposable
 
             Data.SetValue(path, next);
             TrackDirty(path);
+
+            // A derived value is a change to the form like any other. Without these a field whose
+            // VisibleWhen reads a total was never cleared when the total hid it, a cascading select
+            // that depended on one never reloaded, and OnFieldChanged never heard about it at all —
+            // the three things every hand-written change handler does, skipped for exactly the values
+            // the form computed for itself.
+            ClearHiddenValues(path);
+            RunChangeHandler(path);
+            InvalidateDependentOptions(path);
+            FieldChanged?.Invoke(path);
+
             RecomputeValues(path, depth + 1);
         }
     }
@@ -469,7 +537,8 @@ public sealed class BlazorFormState : IDisposable
     {
         if (!_hasClearOnHide) return;
 
-        foreach (var (field, path) in EnumerateFieldPaths())
+        // Materialised: clearing a hidden container changes the live array counts the walk reads.
+        foreach (var (field, path) in EnumerateFieldPaths().ToList())
         {
             if (!field.ClearOnHide || field.VisibleWhen is null) continue;
             if (!DependsOn(field.VisibleWhen, changedPath, BlazorFormPath.Parent(path))) continue;
@@ -670,7 +739,44 @@ public sealed class BlazorFormState : IDisposable
         => _messages.TryGetValue(path, out var list) ? list : Array.Empty<BlazorFormValidationMessage>();
 
     /// <summary>True if there is at least one error-severity message.</summary>
-    public bool HasErrors => AllMessages.Any(m => m.Severity == BlazorFormValidationSeverity.Error);
+    /// <remarks>
+    /// Written as a loop rather than a LINQ query on purpose: every render of every button reads it
+    /// through <c>IsValid</c>, and a nested <c>SelectMany</c> allocates two iterators and a closure each
+    /// time to answer a question that is almost always "no, and here is the first one".
+    /// </remarks>
+    public bool HasErrors
+    {
+        get
+        {
+            foreach (var list in _messages.Values)
+                for (var i = 0; i < list.Count; i++)
+                    if (list[i].Severity == BlazorFormValidationSeverity.Error) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Everything known about one field in a single read: whether the user has been there, whether the
+    /// value has moved from its baseline, and what is currently wrong with it.
+    /// </summary>
+    /// <remarks>
+    /// The pieces are all separately available (<see cref="IsTouched"/>, <see cref="IsDirty"/>,
+    /// <see cref="MessagesFor"/>); this is the aggregate React Hook Form spells <c>getFieldState</c>,
+    /// and it exists because a custom renderer asking all three questions per render otherwise reads
+    /// the state three times and has to keep the answers in step itself.
+    /// </remarks>
+    public BlazorFormFieldState GetFieldState(string path)
+    {
+        var messages = MessagesFor(path);
+        var invalid = false;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (messages[i].Severity != BlazorFormValidationSeverity.Error) continue;
+            invalid = true;
+            break;
+        }
+        return new BlazorFormFieldState(IsTouched(path), IsDirty(path), invalid, messages);
+    }
 
     /// <summary>Validates the entire form and stores the results.</summary>
     public async ValueTask<bool> ValidateAsync(bool includeAsync = true)
@@ -786,6 +892,21 @@ public sealed class BlazorFormState : IDisposable
             }
             NotifyChanged();
         }
+    }
+
+    /// <summary>
+    /// Validates the single field at <paramref name="path"/>, resolving its definition from the schema
+    /// — React Hook Form's <c>trigger(name)</c>. Returns false when the path names no field in the
+    /// schema, so a caller checking one answer from outside the form does not have to go and find the
+    /// definition first.
+    /// </summary>
+    public async ValueTask<bool> ValidateFieldAsync(string path, bool includeAsync = true)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        if (Definition.FindByPath(path) is not { } field) return false;
+
+        await ValidateFieldAsync(field, path, includeAsync);
+        return true;
     }
 
     /// <summary>Validates a single field and refreshes only its messages.</summary>
@@ -960,6 +1081,72 @@ public sealed class BlazorFormState : IDisposable
         foreach (var (path, value) in _initialValues)
             RestoreInitial(path, value);
 
+        ClearTracking();
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Rebases the form onto <paramref name="values"/>: they are written, become the new baseline for
+    /// <see cref="Reset()"/> and <see cref="IsFormDirty"/>, and everything the previous session
+    /// accumulated — messages, touched and dirty flags, the submit count, the wizard position — is
+    /// cleared. This is React Hook Form's <c>reset(values)</c>, and it is what an edit form needs after
+    /// a save round-trip returns the stored record: <see cref="Reset()"/> would put back the values the
+    /// form was constructed with, which are now the wrong ones.
+    /// </summary>
+    /// <remarks>
+    /// Only the paths named are written; anything else keeps the value it currently holds and is
+    /// baselined at that value. Pass every field to replace the form's contents wholesale.
+    /// </remarks>
+    public void Reset(IEnumerable<KeyValuePair<string, object?>> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        foreach (var (path, value) in values)
+            Data.SetValue(path, value);
+
+        // Computed fields are seeded against the new data before it is captured, exactly as they are
+        // when the form is constructed — otherwise every one of them would be dirty from the outset.
+        RecomputeValues(changedPath: null);
+
+        _initialValues.Clear();
+        CaptureInitialValues();
+
+        ClearTracking();
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Every value the schema binds to, as a flat path/value map — the shape
+    /// <see cref="Reset(IEnumerable{KeyValuePair{string, object?}})"/> takes back, so the pair is a
+    /// complete save-and-restore for a draft: stash a snapshot while the user is halfway through, hand
+    /// it back when they return.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Live array elements are walked, so a repeater contributes one entry per row per field
+    /// (<c>Lines[0].Product</c>, <c>Lines[1].Product</c>, …) rather than one opaque list. Presentational
+    /// fields and object containers hold no value of their own and are skipped, exactly as they are
+    /// when the form captures its baseline.
+    /// </para>
+    /// <para>
+    /// Values are the objects the model holds, not copies: this is a map of what is there, not a deep
+    /// clone of it. Serialise it if it has to outlive the objects.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyDictionary<string, object?> Snapshot()
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in EnumerateValuePaths())
+            values[path] = Data.GetValue(path);
+        return values;
+    }
+
+    /// <summary>
+    /// Drops everything accumulated since the form opened — messages, touched/dirty flags, conversion
+    /// failures, cached options, the submit count and the wizard position — without touching the data.
+    /// </summary>
+    private void ClearTracking()
+    {
         _messages.Clear();
         _touched.Clear();
         _dirty.Clear();
@@ -976,13 +1163,12 @@ public sealed class BlazorFormState : IDisposable
         CurrentStepIndex = 0;
         FurthestStepIndex = 0;
         ClampStep();
-        NotifyChanged();
     }
 
     /// <summary>
     /// Puts one field — and anything nested beneath it — back to the value it started with, clearing
     /// its messages and its touched/dirty state. This is the "undo just this answer" that a long form
-    /// needs and that <see cref="Reset"/> is far too blunt for; React Hook Form spells it
+    /// needs and that <see cref="Reset()"/> is far too blunt for; React Hook Form spells it
     /// <c>resetField</c>.
     /// </summary>
     /// <remarks>
@@ -1030,7 +1216,7 @@ public sealed class BlazorFormState : IDisposable
     }
 
     /// <summary>
-    /// Re-captures the current values as the baseline for <see cref="Reset"/> and clears dirty
+    /// Re-captures the current values as the baseline for <see cref="Reset()"/> and clears dirty
     /// tracking — call this after a successful save so the form is no longer reported as dirty.
     /// </summary>
     public void AcceptChanges()
@@ -1208,6 +1394,9 @@ public sealed class BlazorFormState : IDisposable
     /// landed at. Messages below the insertion point are re-indexed so they stay with their item.
     /// </summary>
     public int InsertArrayItem(BlazorFormFieldDefinition arrayField, string arrayPath, int index)
+        => InsertItem(arrayField, arrayPath, index, notify: true);
+
+    private int InsertItem(BlazorFormFieldDefinition arrayField, string arrayPath, int index, bool notify)
     {
         var list = EnsureList(arrayPath);
         var target = Math.Clamp(index, 0, list.Count);
@@ -1230,8 +1419,21 @@ public sealed class BlazorFormState : IDisposable
         ApplyItemDefaults(arrayField, BlazorFormPath.Combine(arrayPath, target), overwrite: true);
         RecomputeValues(arrayPath);
         RemoveMessagesFor(arrayPath); // the collection-size rule may now pass
-        NotifyChanged();
+        if (notify) NotifyArrayChanged(arrayPath);
         return target;
+    }
+
+    /// <summary>
+    /// Announces that an array's contents changed. A repeater operation changes the value of the field
+    /// the list binds to as surely as typing does, so anything watching <see cref="FieldChanged"/> — an
+    /// autosave, a preview, a page-level dirty prompt — has to hear about it. Only the array's own path
+    /// is raised: the rows beneath it moved, but which row is "the field that changed" is not a
+    /// question with an answer.
+    /// </summary>
+    private void NotifyArrayChanged(string arrayPath)
+    {
+        FieldChanged?.Invoke(arrayPath);
+        NotifyChanged();
     }
 
     /// <summary>
@@ -1254,7 +1456,9 @@ public sealed class BlazorFormState : IDisposable
             .Select(p => (Relative: p[source.Length..], Value: Data.GetValue(p)))
             .ToList();
 
-        var target = InsertArrayItem(arrayField, arrayPath, index + 1);
+        // Quietly: the row is announced once it holds the copy, not while it is still the empty one the
+        // insert created — a listener that reacted to the first event would save a blank line.
+        var target = InsertItem(arrayField, arrayPath, index + 1, notify: false);
         if (target < 0) return -1;
 
         var targetPath = BlazorFormPath.Combine(arrayPath, target);
@@ -1263,7 +1467,7 @@ public sealed class BlazorFormState : IDisposable
 
         TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
-        NotifyChanged();
+        NotifyArrayChanged(arrayPath);
         return target;
     }
 
@@ -1340,7 +1544,7 @@ public sealed class BlazorFormState : IDisposable
         RemoveMessagesFor(arrayPath);
         TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
-        NotifyChanged();
+        NotifyArrayChanged(arrayPath);
     }
 
     /// <summary>Moves an array item from one index to another.</summary>
@@ -1358,7 +1562,55 @@ public sealed class BlazorFormState : IDisposable
         RemapArrayIndices(arrayPath, index => MapMovedIndex(index, from, to));
         TrackDirty(arrayPath);
         RecomputeValues(arrayPath);
-        NotifyChanged();
+        NotifyArrayChanged(arrayPath);
+    }
+
+    /// <summary>
+    /// Exchanges two array items, taking their messages and touched/dirty state with them. Distinct
+    /// from <see cref="MoveArrayItem"/>, which shuffles everything between the two positions along by
+    /// one; a swap leaves every other row exactly where it was, which is what a drag-and-drop reorder
+    /// of two rows means and what React Hook Form's <c>useFieldArray</c> spells <c>swap</c>.
+    /// </summary>
+    public void SwapArrayItems(string arrayPath, int first, int second)
+    {
+        if (Data.GetValue(arrayPath) is not IList list) return;
+        if (first < 0 || first >= list.Count || second < 0 || second >= list.Count || first == second) return;
+
+        (list[first], list[second]) = (list[second], list[first]);
+
+        RemapArrayIndices(arrayPath, index => index == first ? second : index == second ? first : index);
+        TrackDirty(arrayPath);
+        RecomputeValues(arrayPath);
+        NotifyArrayChanged(arrayPath);
+    }
+
+    /// <summary>
+    /// Empties an array field, discarding every row's messages and touched/dirty state along with it.
+    /// Removing rows one at a time costs a re-render and a re-index per row, and the caller has to walk
+    /// backwards to avoid the indices moving underneath them.
+    /// </summary>
+    public void ClearArrayItems(string arrayPath)
+    {
+        if (Data.GetValue(arrayPath) is not IList list || list.Count == 0) return;
+
+        try
+        {
+            list.Clear();
+        }
+        catch (NotSupportedException)
+        {
+            // A fixed-size or read-only list; the model keeps its rows rather than the form throwing.
+            return;
+        }
+
+        RemoveMessagesUnder(arrayPath);
+        RemovePathsUnder(_touched, arrayPath);
+        RemovePathsUnder(_dirty, arrayPath);
+        // The collection-size rule is judged against the field itself, so its own message goes too.
+        RemoveMessagesFor(arrayPath);
+        TrackDirty(arrayPath);
+        RecomputeValues(arrayPath);
+        NotifyArrayChanged(arrayPath);
     }
 
     public int ArrayCount(string arrayPath) => Data.GetValue(arrayPath) switch
@@ -1444,6 +1696,13 @@ public sealed class BlazorFormState : IDisposable
     {
         if (!_messages.TryGetValue(message.FieldPath, out var list))
             _messages[message.FieldPath] = list = new List<BlazorFormValidationMessage>();
+
+        if (SingleErrorPerField && message.Severity == BlazorFormValidationSeverity.Error)
+        {
+            for (var i = 0; i < list.Count; i++)
+                if (list[i].Severity == BlazorFormValidationSeverity.Error) return;
+        }
+
         list.Add(message);
     }
 
@@ -1717,7 +1976,7 @@ public sealed class BlazorFormState : IDisposable
         var elementType = Data.GetElementType(arrayPath);
 
         if (Data is BlazorFormDictionaryDataAccessor || elementType is null || elementType == typeof(object))
-            return template?.Type == BlazorFormFieldType.Object ? new Dictionary<string, object?>() : null;
+            return template?.Type == BlazorFormFieldType.Object ? BlazorFormDictionaryDataAccessor.NewObject() : null;
 
         if (elementType == typeof(string)) return null;
         var underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;

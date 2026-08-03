@@ -15,16 +15,25 @@
            role="@(IsSwitch ? "switch" : null)"
            aria-required="@AriaRequired"
            aria-invalid="@AriaInvalid"
+           aria-label="@AriaLabel"
            aria-describedby="@DescribedBy"
            @onchange="OnToggle"
            @onblur="OnBlur" />
-    <span id="@Context.LabelId">
-        @(Field.Label ?? Field.Name)
-        @if (Context.IsRequired)
-        {
-            <span class="ff-required" aria-hidden="true">*</span>
-        }
-    </span>
+    @* HideLabel() means "this control is already named by what surrounds it" — a consent box under a
+       heading that says the same thing, a switch in a labelled toolbar. The visible text goes and the
+       label survives as the control's accessible name (see BlazorFormInputBase.AriaLabel), which is
+       what it means everywhere else in the library; rendering it anyway made HideLabel the one
+       builder call that silently did nothing on a checkbox. *@
+    @if (Field.ShowLabel)
+    {
+        <span id="@Context.LabelId">
+            @(Field.Label ?? Field.Name)
+            @if (Context.IsRequired)
+            {
+                <span class="ff-required" aria-hidden="true">*</span>
+            }
+        </span>
+    }
 </label>
 
 @code {

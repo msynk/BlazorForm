@@ -3,7 +3,9 @@
 @using Microsoft.AspNetCore.Components.Forms
 
 <div class="ff-file">
-    <InputFile id="@Context.ElementId"
+    @* Splat first so the renderer's own id and ARIA wiring below always wins. *@
+    <InputFile @attributes="ExtraAttributes"
+               id="@Context.ElementId"
                class="@CssClass"
                multiple="@Field.Multiple"
                accept="@Field.Accept"

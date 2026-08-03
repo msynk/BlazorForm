@@ -27,6 +27,8 @@ public sealed class BlazorFormFieldRendererRegistry : IBlazorFormFieldRendererRe
         Register(BlazorFormFieldType.Select, typeof(BlazorFormSelectInput));
         Register(BlazorFormFieldType.MultiSelect, typeof(BlazorFormMultiSelectInput));
         Register(BlazorFormFieldType.Radio, typeof(BlazorFormRadioInput));
+        Register(BlazorFormFieldType.Combobox, typeof(BlazorFormComboboxInput));
+        Register(BlazorFormFieldType.Tags, typeof(BlazorFormTagsInput));
         Register(BlazorFormFieldType.Date, typeof(BlazorFormDateInput));
         Register(BlazorFormFieldType.DateTime, typeof(BlazorFormDateInput));
         Register(BlazorFormFieldType.Time, typeof(BlazorFormDateInput));

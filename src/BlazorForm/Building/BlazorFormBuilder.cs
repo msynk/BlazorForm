@@ -40,6 +40,15 @@ public class BlazorFormBuilder
     public BlazorFormBuilder Radio(string name, Action<BlazorFormFieldBuilder>? configure = null) => Field(name, BlazorFormFieldType.Radio, configure);
     public BlazorFormBuilder MultiSelect(string name, Action<BlazorFormFieldBuilder>? configure = null) => Field(name, BlazorFormFieldType.MultiSelect, configure);
     public BlazorFormBuilder Date(string name, Action<BlazorFormFieldBuilder>? configure = null) => Field(name, BlazorFormFieldType.Date, configure);
+
+    /// <summary>A text box that filters its options as the user types. See <see cref="BlazorFormFieldBuilder.AsCombobox"/>.</summary>
+    public BlazorFormBuilder Combobox(string name, Action<BlazorFormFieldBuilder>? configure = null)
+        => Field(name, BlazorFormFieldType.Combobox, configure);
+
+    /// <summary>A list of short values shown as removable chips. See <see cref="BlazorFormFieldBuilder.AsTags"/>.</summary>
+    public BlazorFormBuilder Tags(string name, Action<BlazorFormFieldBuilder>? configure = null)
+        => Field(name, BlazorFormFieldType.Tags, configure);
+
     public BlazorFormBuilder File(string name, Action<BlazorFormFieldBuilder>? configure = null) => Field(name, BlazorFormFieldType.File, configure);
 
     /// <summary>

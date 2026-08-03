@@ -167,6 +167,67 @@ public class ListingDraft
     public string Passcode { get; set; } = "";
 }
 
+/// <summary>Model for the combobox / tags / change-handler demo.</summary>
+public class TalentProfile
+{
+    [Required, Display(Name = "Full name")]
+    public string FullName { get; set; } = "";
+
+    [Display(Name = "Country")]
+    public string? Country { get; set; }
+
+    [Display(Name = "City")]
+    public string? City { get; set; }
+
+    [Display(Name = "Plan")]
+    public string Plan { get; set; } = "solo";
+
+    [Display(Name = "Seats")]
+    public int Seats { get; set; } = 1;
+
+    [Display(Name = "Skills")]
+    public List<string> Skills { get; set; } = new();
+}
+
+/// <summary>
+/// Model for the DataAnnotations demo. The attributes become field rules through the generator; the
+/// <see cref="IValidatableObject"/> implementation is the part no attribute can express, and the part
+/// the integration exists for.
+/// </summary>
+public class RoomBooking : IValidatableObject
+{
+    [Required, Display(Name = "Guest name")]
+    public string GuestName { get; set; } = "";
+
+    [Required, EmailAddress]
+    public string Email { get; set; } = "";
+
+    [Display(Name = "Check in")] public DateOnly CheckIn { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+    [Display(Name = "Check out")] public DateOnly CheckOut { get; set; } = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
+
+    [Range(1, 8)] public int Guests { get; set; } = 1;
+
+    [Display(Name = "Room type")] public string RoomType { get; set; } = "single";
+
+    /// <summary>The rules that need more than one property, which is what an attribute cannot see.</summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (CheckOut <= CheckIn)
+            yield return new ValidationResult("Check out must be after check in.", [nameof(CheckOut)]);
+
+        if (CheckIn < DateOnly.FromDateTime(DateTime.Today))
+            yield return new ValidationResult("Check in cannot be in the past.", [nameof(CheckIn)]);
+
+        var capacity = RoomType switch { "single" => 1, "double" => 2, _ => 4 };
+        if (Guests > capacity)
+            yield return new ValidationResult(
+                $"A {RoomType} room sleeps {capacity}.", [nameof(Guests), nameof(RoomType)]);
+
+        if ((CheckOut.DayNumber - CheckIn.DayNumber) > 28)
+            yield return new ValidationResult("Stays longer than 28 nights have to be booked by phone.");
+    }
+}
+
 /// <summary>Model for the per-row conditions demo: each contact row asks for a different field.</summary>
 public class ContactSheet
 {

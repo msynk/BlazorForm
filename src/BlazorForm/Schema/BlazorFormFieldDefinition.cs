@@ -97,6 +97,17 @@ public sealed class BlazorFormFieldDefinition
     /// <summary>Field paths <see cref="Computed"/> reads. Empty means "recompute on any change".</summary>
     public IList<string> ComputedDependencies { get; set; } = new List<string>();
 
+    /// <summary>
+    /// Runs when this field's value changes — "when the country changes, clear the city". Not the same
+    /// thing as <see cref="Computed"/>: a computed field owns its value and overwrites whatever is
+    /// there, while a handler writes a value the user is then free to change.
+    /// </summary>
+    /// <remarks>
+    /// Not raised while the form is being constructed: applying defaults and seeding computed values is
+    /// the form initialising, not the user changing something.
+    /// </remarks>
+    public BlazorFormChangeHandler? OnChanged { get; set; }
+
     // --- Constraints (also surfaced as native input attributes) ---
     public int? MinLength { get; set; }
     public int? MaxLength { get; set; }
@@ -200,8 +211,13 @@ public sealed class BlazorFormFieldDefinition
     /// </summary>
     public bool IsPresentational => Type is BlazorFormFieldType.Static;
 
-    /// <summary>True when the field renders a set of choices.</summary>
-    public bool IsChoice => Type is BlazorFormFieldType.Select or BlazorFormFieldType.MultiSelect or BlazorFormFieldType.Radio;
+    /// <summary>
+    /// True when the field renders a set of choices. A combobox counts: it filters the same
+    /// <see cref="Options"/> a dropdown lists, and it is fed by the same
+    /// <see cref="OptionsProvider"/>.
+    /// </summary>
+    public bool IsChoice => Type is BlazorFormFieldType.Select or BlazorFormFieldType.MultiSelect
+        or BlazorFormFieldType.Radio or BlazorFormFieldType.Combobox;
 
     /// <summary>
     /// Adds a validation rule, replacing any existing rule that reports the same

@@ -97,6 +97,101 @@ public sealed class BlazorFormDefinition
     public IEnumerable<BlazorFormFieldDefinition> OrderedFields() => Fields.OrderBy(f => f.Order);
 
     /// <summary>
+    /// Returns an independent copy of the schema, so a shared definition can be tailored for one form
+    /// without the change leaking into every other one rendering it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A schema is usually built once and kept — a static readonly field, a singleton from DI — and
+    /// every collection on it is mutable. Adding this user's options to a field, or hiding a step for
+    /// this tenant, edits the copy everyone else is looking at. This is the safe way to do it.
+    /// </para>
+    /// <para>
+    /// Every container is rebuilt: fields, children, item templates, options, rule lists, dependency
+    /// lists and attribute bags. What is <em>shared</em> is everything with no state to corrupt — rule
+    /// instances, conditions, and the delegates behind <see cref="BlazorFormFieldDefinition.Computed"/>,
+    /// <see cref="BlazorFormFieldDefinition.OptionsProvider"/> and
+    /// <see cref="BlazorFormFieldDefinition.OnChanged"/>. Values stashed in an attribute bag are
+    /// shared too, since the library cannot know how to copy an arbitrary object; a copy is only as
+    /// independent as what the caller put in there.
+    /// </para>
+    /// </remarks>
+    public BlazorFormDefinition Clone()
+    {
+        var copy = new BlazorFormDefinition
+        {
+            Title = Title,
+            Description = Description,
+            ModelType = ModelType,
+            Columns = Columns,
+            Fields = Fields.Select(CloneField).ToList(),
+            Steps = Steps.Select(CloneStep).ToList(),
+            Validators = new List<IBlazorFormValidationRule>(Validators)
+        };
+        return copy;
+
+        static BlazorFormFieldDefinition CloneField(BlazorFormFieldDefinition field)
+            => new(field.Name, field.Type)
+            {
+                ValueType = field.ValueType,
+                Label = field.Label,
+                Placeholder = field.Placeholder,
+                HelpText = field.HelpText,
+                ShowLabel = field.ShowLabel,
+                Prefix = field.Prefix,
+                Suffix = field.Suffix,
+                ShowCharacterCount = field.ShowCharacterCount,
+                Required = field.Required,
+                ReadOnly = field.ReadOnly,
+                DefaultValue = field.DefaultValue,
+                Order = field.Order,
+                Group = field.Group,
+                Options = new List<BlazorFormSelectOption>(field.Options),
+                OptionsProvider = field.OptionsProvider,
+                OptionsDependencies = new List<string>(field.OptionsDependencies),
+                Suggestions = new List<string>(field.Suggestions),
+                Computed = field.Computed,
+                ComputedDependencies = new List<string>(field.ComputedDependencies),
+                OnChanged = field.OnChanged,
+                MinLength = field.MinLength,
+                MaxLength = field.MaxLength,
+                Min = field.Min,
+                Max = field.Max,
+                NumericStep = field.NumericStep,
+                Pattern = field.Pattern,
+                Multiple = field.Multiple,
+                Accept = field.Accept,
+                MaxFileSize = field.MaxFileSize,
+                Autocomplete = field.Autocomplete,
+                InputMode = field.InputMode,
+                Autofocus = field.Autofocus,
+                UpdateOn = field.UpdateOn,
+                DebounceMilliseconds = field.DebounceMilliseconds,
+                InputAttributes = new Dictionary<string, object?>(field.InputAttributes),
+                ColumnSpan = field.ColumnSpan,
+                VisibleWhen = field.VisibleWhen,
+                DisabledWhen = field.DisabledWhen,
+                RequiredWhen = field.RequiredWhen,
+                ClearOnHide = field.ClearOnHide,
+                Validators = new List<IBlazorFormValidationRule>(field.Validators),
+                Children = field.Children.Select(CloneField).ToList(),
+                ItemTemplate = field.ItemTemplate is { } template ? CloneField(template) : null,
+                MinItems = field.MinItems,
+                MaxItems = field.MaxItems,
+                CustomRenderer = field.CustomRenderer,
+                Attributes = new Dictionary<string, object?>(field.Attributes)
+            };
+
+        static BlazorFormStep CloneStep(BlazorFormStep step)
+            => new(step.Id, step.Title)
+            {
+                Description = step.Description,
+                Fields = new List<string>(step.Fields),
+                VisibleWhen = step.VisibleWhen
+            };
+    }
+
+    /// <summary>
     /// Checks the schema for the mistakes that are easy to make and hard to see: two siblings sharing a
     /// name (they would bind to the same path and overwrite each other), an array with no item
     /// template, a step naming a field that does not exist, a condition or computed dependency pointing
@@ -168,6 +263,22 @@ public sealed class BlazorFormDefinition
                 into.Add(new BlazorFormSchemaDiagnostic(path,
                     "A custom field has no renderer key, so no component can be resolved for it."));
 
+            // A combobox is a text box whose entry is matched back to an option by its *label*, because
+            // the label is what the browser puts in the box. Two options sharing one leaves the match
+            // ambiguous: the first wins, silently, and the user's choice becomes a coin toss.
+            if (field.Type == BlazorFormFieldType.Combobox)
+            {
+                foreach (var group in field.Options
+                             .GroupBy(o => o.Label, StringComparer.OrdinalIgnoreCase)
+                             .Where(g => g.Count() > 1))
+                {
+                    into.Add(new BlazorFormSchemaDiagnostic(path,
+                        $"{group.Count()} of this combobox's options are labelled '{group.Key}'; the entry cannot be " +
+                        "matched back to one of them, so the first always wins.",
+                        BlazorFormSchemaDiagnosticSeverity.Warning));
+                }
+            }
+
             if (field.IsChoice && field.Options.Count == 0 && field.OptionsProvider is null)
                 into.Add(new BlazorFormSchemaDiagnostic(path,
                     "A choice field has neither options nor an options provider; it will render an empty list.",
@@ -185,6 +296,16 @@ public sealed class BlazorFormDefinition
             CheckBounds(field.MinLength, field.MaxLength, "MinLength", "MaxLength", path, into);
             CheckBounds(field.MinItems, field.MaxItems, "MinItems", "MaxItems", path, into);
             CheckBounds(field.Min, field.Max, "Min", "Max", path, into);
+
+            // Asking for a value to be written as the user types only means something on a control the
+            // user types into. Everywhere else the browser has no `input` event worth the name — a
+            // dropdown, a radio group and a file picker only ever commit — and a combobox deliberately
+            // refuses, because half of a label stands for no value at all. The setting was accepted and
+            // then ignored, which is the kind of thing that costs an afternoon.
+            if (field.UpdateOn == BlazorFormUpdateTrigger.Input && !TypesThatWriteAsYouType(field.Type))
+                into.Add(new BlazorFormSchemaDiagnostic(path,
+                    $"UpdateOnInput has no effect on a {field.Type} field; it commits when the choice is made.",
+                    BlazorFormSchemaDiagnosticSeverity.Warning));
 
             if (field.Computed is not null && !field.ReadOnly)
                 into.Add(new BlazorFormSchemaDiagnostic(path,
@@ -225,6 +346,17 @@ public sealed class BlazorFormDefinition
                 }
             }
         }
+
+        /// <summary>
+        /// Whether a control writes its value while the user is still working on it. A slider is here
+        /// because dragging <em>is</em> the interaction: it always writes live, whatever the schema says.
+        /// </summary>
+        static bool TypesThatWriteAsYouType(BlazorFormFieldType type) => type is
+            BlazorFormFieldType.Text or BlazorFormFieldType.TextArea or BlazorFormFieldType.Email
+            or BlazorFormFieldType.Password or BlazorFormFieldType.Url or BlazorFormFieldType.Tel
+            or BlazorFormFieldType.Search or BlazorFormFieldType.Integer or BlazorFormFieldType.Number
+            or BlazorFormFieldType.Date or BlazorFormFieldType.DateTime or BlazorFormFieldType.Time
+            or BlazorFormFieldType.Color or BlazorFormFieldType.Range or BlazorFormFieldType.Custom;
 
         static void CheckBounds<T>(T? min, T? max, string minName, string maxName, string path,
             List<BlazorFormSchemaDiagnostic> into) where T : struct, IComparable<T>

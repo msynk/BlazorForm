@@ -222,7 +222,15 @@
 
     private string LabelText => Field.Label ?? Field.Name;
 
-    private bool IsGroupInput => Field.Type is BlazorFormFieldType.Radio or BlazorFormFieldType.MultiSelect;
+    /// <summary>
+    /// Whether the field renders a set of controls rather than one, so its label is a <c>&lt;span&gt;</c>
+    /// the group points <c>aria-labelledby</c> at rather than a <c>&lt;label for&gt;</c>. A tag list
+    /// belongs here for a reason the other two do not have: the box a tag is typed into disappears once
+    /// the list is full or the form is read-only, so a <c>for</c> attribute aimed at it would be left
+    /// pointing at nothing.
+    /// </summary>
+    private bool IsGroupInput => Field.Type is BlazorFormFieldType.Radio or BlazorFormFieldType.MultiSelect
+        or BlazorFormFieldType.Tags;
 
     private string InvalidClass => Context.HasError && Context.ShowMessages ? "ff-field--invalid" : "";
 

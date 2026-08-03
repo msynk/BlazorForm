@@ -7,7 +7,7 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 - **Schema-first** – describe a form once as a `BlazorFormDefinition` and render it anywhere.
 - **Multiple sources** – generate a schema from a POCO via reflection + DataAnnotations, build one with a fluent API, or import a JSON Schema document.
 - **Strongly-typed builder** – select fields with lambda expressions (including nested ones, `x => x.Address.City`) so names and value types are inferred and refactor-safe.
-- **Rich field types** – text, search, number, select, multi-select, radio, checkbox/switch, date/time, range, color, file upload, static section headings, nested objects, and repeating arrays.
+- **Rich field types** – text, search, number, select, **combobox**, multi-select, radio, checkbox/switch, date/time, range, color, file upload, **tags**, static section headings, nested objects, and repeating arrays.
 - **Field polish** – prefix/suffix affixes, live character counters, `<datalist>` suggestions, a password reveal toggle, a clear button, and arbitrary HTML attributes splatted onto any control.
 - **Live updates** – write on every keystroke instead of on blur, with optional debouncing, for as-you-type previews and validation.
 - **Validation** – built-in rules (required, length, range, pattern, email, URL, compare, multiple-of, unique items, collection size, file size/type), custom sync/async rules, form-level cross-field rules, and optional [FluentValidation](https://docs.fluentvalidation.net/) integration.
@@ -15,10 +15,11 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 - **Conditional behaviour** – show/hide, disable, or conditionally require fields and wizard steps based on other values, and clear hidden values so abandoned branches never reach your model.
 - **Async & cascading options** – load select options from a service and reload them when a dependency changes.
 - **Computed values** – derive a field from the rest of the form (totals, full names), including per-row formulas inside a repeater.
+- **Change handlers** – `OnChange(...)` puts "when the country changes, clear the city" in the schema, where the rest of the field's behaviour already lives.
 - **Wizards** – split a form into ordered steps with per-step validation, conditional steps and a clickable stepper.
 - **Accessible by default** – labels, `aria-required` / `aria-invalid` / `aria-describedby`, live-announced errors, grouped radio and multi-select controls, real focus management (autofocus, and focus-the-first-error after a failed submit), and an optional error summary that links to each field.
 - **Localisable** – swap *all* the built-in English text — validation messages, buttons, placeholders, repeater labels — for your own via `IBlazorFormMessageProvider`.
-- **Schema diagnostics** – `Definition.Validate()` catches duplicate field names, arrays with no item template, steps naming fields that do not exist, and conditions pointing nowhere.
+- **Schema diagnostics** – `Definition.Validate()` catches duplicate field names, arrays with no item template, steps naming fields that do not exist, conditions pointing nowhere, and settings a control can never honour.
 - **Composable layout** – render the whole form with `BlazorFormView`, cluster fields into named
   `<fieldset>` groups, or place them one at a time with `<BlazorFormField>` and own the layout yourself.
 - **Pluggable renderers** – override the default HTML inputs through a renderer registry.
@@ -169,7 +170,7 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 
 | Extension | Meaning |
 | --- | --- |
-| `x-widget` | Force a control: `textarea`, `radio`, `multiselect`, `range`, `switch`, `file`, `static`, `hidden`, … |
+| `x-widget` | Force a control: `textarea`, `radio`, `combobox`, `multiselect`, `tags`, `range`, `switch`, `file`, `static`, `hidden`, … |
 | `x-renderer` | A custom renderer key registered with `RegisterCustom`. |
 | `x-order`, `x-group`, `x-placeholder`, `x-autocomplete`, `x-inputMode`, `x-autofocus` | Field metadata. |
 | `x-columns`, `x-colSpan` | Grid layout. |
@@ -257,6 +258,53 @@ var state = new BlazorFormState(definition, accessor)
 
 A field that already shows an error always revalidates eagerly, so the error clears as soon as it is fixed.
 
+### How much is reported at once
+
+By default a field shows every rule it currently breaks. Set `SingleErrorPerField` to show only the
+first — React Hook Form's default, and the right call for a password with four constraints on it, where
+four complaints under one box read as four problems rather than one field to go and fix:
+
+```csharp
+state.SingleErrorPerField = true;
+```
+
+Every rule still runs, so the submit decision is unchanged; this is about what the user reads.
+Warnings sit alongside the error rather than competing with it.
+
+### Editing an existing record
+
+`Reset()` restores the values the form was *constructed* with, which after a save round-trip are the
+wrong ones. `Reset(values)` writes new ones and makes them the baseline, so `IsFormDirty`, an undo
+button and an unsaved-changes prompt all mean what they say again:
+
+```csharp
+state.Reset(new Dictionary<string, object?>
+{
+    ["Customer"] = stored.Customer,
+    ["Lines[0].Description"] = stored.Lines[0].Description,
+});
+```
+
+`Snapshot()` is the other half: it maps every path the schema binds to onto its value — one entry per
+repeater row included — which is exactly what `Reset(values)` takes back, so the two together are a
+draft save and restore:
+
+```csharp
+var draft = state.Snapshot();     // stash it in session storage
+// … the user comes back …
+state.Reset(draft);
+```
+
+`ValidateFieldAsync(path)` checks one answer without judging the whole form, and `GetFieldState(path)`
+answers everything about one field at once:
+
+```csharp
+await state.ValidateFieldAsync("Customer");
+
+var field = state.GetFieldState("Customer");
+// field.IsTouched, field.IsDirty, field.IsInvalid, field.Error, field.Messages
+```
+
 ### Localisation
 
 Register an `IBlazorFormMessageProvider` to replace the built-in English text — typically one wrapping `IStringLocalizer`:
@@ -272,6 +320,28 @@ labels and empty state, the error summary heading, the character counter. The ke
 
 Messages passed explicitly to a rule — and labels passed explicitly to `BlazorFormView` — always win
 over the provider.
+
+### DataAnnotations and `IValidatableObject`
+
+A schema generated from a model already carries its `[Required]`, `[StringLength]`, `[Range]` and
+friends as field rules. What no attribute can express is a rule that reads more than one property —
+and in .NET that is `IValidatableObject`:
+
+```csharp
+var state = new BlazorFormState(definition, new BlazorFormModelDataAccessor(model))
+    .UseDataAnnotations();
+```
+
+Only the cross-property layer is added: running `Validator` over the properties again would put two
+differently-worded copies of "required" under the same box. Pass
+`UseDataAnnotations(includePropertyAttributes: true)` when the schema came from somewhere that never
+saw those attributes — a JSON Schema document rendered over a typed model.
+
+A result naming one member lands on that field, one naming several puts the same complaint under each
+of them, and one naming none becomes a form-level message. `IValidatableObject.Validate` is called
+directly rather than through `Validator.TryValidateObject`, which skips it entirely once any property
+attribute has failed — the user would otherwise fix the last required field, submit again, and be told
+about something new.
 
 ### FluentValidation
 
@@ -399,6 +469,65 @@ another; a set of formulas that reference each other in a cycle settles rather t
 Dependencies are named relative to the object that owns the field, so `"Quantity"` on a repeater row
 means that row's quantity. The untyped builder takes a context instead:
 `f.Computed(ctx => ctx.Sibling("width"), "width")`.
+
+## Combobox and tags
+
+A `<select>` of two hundred countries is navigated by scrolling. A combobox is typed into:
+
+```csharp
+.Field(x => x.Country, f => f
+    .Options(("fr", "France"), ("gb", "United Kingdom") /* … */)
+    .AsCombobox()                      // closed: an answer on no list is reported
+    .Clearable())
+
+.Field(x => x.City, f => f
+    .AsCombobox(allowCustom: true)     // the list proposes; anything is accepted
+    .OptionsFrom(load: …, dependsOn: nameof(Model.Country)))
+```
+
+It is built on the browser's own `<input list>` + `<datalist>`, so filtering, keyboard navigation and
+screen-reader support are the platform's. The library supplies the piece a bare datalist cannot: the
+label the user reads is mapped onto the value the model stores, so an option can be `("fr", "France")`
+rather than being forced to show its own key. Static options, `OptionsFromEnum` and async/cascading
+`OptionsFrom` all work exactly as they do on a `<select>`.
+
+A combobox always commits when the choice is made, whatever `UpdateOn` says: the box holds a label
+and the model holds the value that label stands for, and half a label stands for nothing.
+
+`AsCombobox()` adds a rule reporting an answer that is on no list — it is *reported*, never silently
+discarded. The rule can only check options the schema itself declares; choices that arrive from an
+`OptionsFrom` provider live in the form's runtime state rather than the schema, so validate those on
+the server where the same lookup lives.
+
+A list of short strings is a set of chips rather than a repeater:
+
+```csharp
+.Field(x => x.Skills, f => f.AsTags(max: 8))
+```
+
+Enter or a comma adds one (`Attr("tagSeparators", ";")` changes the set), backspace on an empty box
+takes the last one back, and duplicates are refused case-insensitively. The entry box deliberately
+belongs to no form, so pressing Enter adds a tag instead of posting the page.
+
+## Change handlers
+
+`Computed` derives a value the field owns. `OptionsFrom(dependsOn: …)` reloads a list. `ClearOnHide`
+empties an abandoned branch. What none of them expresses is "when A changes, write B" where B is still
+the user's to edit — so that is what `OnChange` is for:
+
+```csharp
+.Field(x => x.Plan, f => f
+    .Options(("solo", "Solo"), ("team", "Team"))
+    .OnChange(ctx => ctx.SetSibling(nameof(Model.Seats), ctx.Value is "team" ? 5 : 1)))
+
+.Field(x => x.Country, f => f.OnChange(ctx => ctx.ClearSibling("City")))
+```
+
+Paths resolve relative to the object that owns the field, exactly as conditions and computed
+dependencies do, so a handler on a repeater's item template means *that row*. What a handler writes
+does not mark the field touched — the user has not been there, and a field the form filled in on their
+behalf should not open covered in errors. Handlers do not run while the form is being constructed, and
+a pair that answer each other settles rather than recursing.
 
 ## Layout
 
@@ -557,11 +686,14 @@ When you let the view build its own state from `Definition`, capture the compone
 | `IsFormDirty`, `DirtyFields`, `TouchedFields` | Change tracking. Dirtiness is a comparison against the values the form opened with, so a field typed into and put back is clean again. |
 | `ResetField(path)` | Puts one field — and anything nested beneath it — back to the value it started with. |
 | `IsValidating`, `IsSubmitting`, `IsSubmitted`, `SubmitCount`, `IsValid`, `HasValidated` | Submission state. `IsValid` reports what validation has *found*, so check `HasValidated` before treating it as a verdict — a form nobody has validated has no errors. |
+| `GetFieldState(path)` | Touched, dirty, invalid, the first error and every message for one field, in a single read. |
 | `SubmitAsync` | Marks everything touched, validates, and dispatches — ignoring re-entrant calls. |
-| `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. |
+| `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. `ValidateFieldAsync(path)` resolves the field from the schema for you. |
+| `SingleErrorPerField` | Show a field's first error rather than every rule it breaks. Every rule still runs. |
 | `MessagesFor`, `AllMessages`, `OrderedMessages`, `SetServerError(s)` | Validation messages. |
-| `Reset` / `AcceptChanges` | Restore the starting values, or make the current ones the new baseline. |
-| `AddArrayItem`, `InsertArrayItem`, `DuplicateArrayItem`, `RemoveArrayItem`, `MoveArrayItem` | Repeater operations; messages, touched and dirty state follow their items. |
+| `Reset()` / `Reset(values)` / `AcceptChanges` | Restore the starting values, rebase onto new ones, or make the current ones the new baseline. |
+| `Snapshot()` | Every bound path mapped onto its value — the shape `Reset(values)` takes back, so the two are a draft save and restore. |
+| `AddArrayItem`, `InsertArrayItem`, `DuplicateArrayItem`, `RemoveArrayItem`, `MoveArrayItem`, `SwapArrayItems`, `ClearArrayItems` | Repeater operations; messages, touched and dirty state follow their items. |
 | `FocusAsync(path)` | Moves focus to the control rendering a path; false when nothing is rendering it. |
 | `Text(key, args)` | Resolves the library's own UI text through the registered message provider. |
 | `NextStepAsync`, `PreviousStep`, `GoToStep`, `VisibleSteps`, `CurrentStepNumber`, `FurthestStepIndex`, `IsStepReachable` | Wizard navigation. |
@@ -571,7 +703,7 @@ When you let the view build its own state from `Definition`, capture the compone
 
 | Type | Purpose |
 | --- | --- |
-| `BlazorFormDefinition` | The schema: fields, wizard steps, form-level rules and metadata. |
+| `BlazorFormDefinition` | The schema: fields, wizard steps, form-level rules and metadata. `Clone()` for a shared schema you want to tailor. |
 | `BlazorFormFieldDefinition` / `BlazorFormFieldType` | A single field and its logical type. |
 | `BlazorFormBuilder` / `BlazorFormBuilder<TModel>` | Fluent schema builders. |
 | `BlazorFormSchemaGenerator` | Reflection + DataAnnotations schema generation. |

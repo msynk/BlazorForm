@@ -8,6 +8,65 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Combobox (`AsCombobox()`)** — a text box that filters its options as the user types, for the
+  dropdown that grew past a screenful. It is built on the browser's own `<input list>` + `<datalist>`,
+  so filtering, keyboard navigation, touch behaviour and screen-reader support are the platform's
+  rather than a thousand lines of hand-rolled ARIA; what the library adds is the one thing a bare
+  datalist cannot do — mapping the label the user reads onto the value the model stores. It takes
+  static options, `OptionsFromEnum`, and async/cascading `OptionsFrom` exactly as a `<select>` does.
+  Closed by default (an answer on no list is reported, never discarded); `AsCombobox(allowCustom:
+  true)` makes the list a shortcut instead of a constraint.
+- **Tags (`AsTags()`)** — a collection of short strings as removable chips with one box to type the
+  next into. The same data `ArrayOf(..., Text)` holds, with the affordance a word deserves: a repeater
+  gives every entry a row with add, remove, duplicate and reorder buttons, which is right for an
+  invoice line and wrong for "urgent". Enter or a separator commits, backspace on an empty box takes
+  the last one back, duplicates are refused case-insensitively, and the entry box belongs to no form
+  so Enter adds a tag instead of posting the page.
+- **`BlazorFormState.Snapshot()`** — every path the schema binds to, mapped onto its value, including
+  one entry per repeater row. It is exactly the shape `Reset(values)` takes back, so the pair is a
+  complete save-and-restore for a draft: stash it while the user is halfway through, hand it back when
+  they return.
+- **`BlazorFormDefinition.Clone()`** — an independent copy of a schema. A definition is usually built
+  once and kept, and every collection on it is mutable, so adding this user's options to a field edits
+  the schema everyone else is looking at. Containers are rebuilt; rules, conditions and the delegates
+  behind `Computed`, `OptionsProvider` and `OnChanged` are shared, having no state to corrupt.
+- **`state.UseDataAnnotations()`** — runs the model's `IValidatableObject` alongside the schema's
+  rules, the .NET-native counterpart of `UseFluentValidation()`. The generator already turns the
+  property attributes it understands into field rules, so only the cross-property layer is added by
+  default; running `Validator` over the properties again would put two differently-worded copies of
+  the same complaint under every field. `IValidatableObject.Validate` is called directly rather than
+  through `Validator.TryValidateObject`, which skips it entirely once any property attribute has
+  failed — on a form that would mean the user fixes the last required field, submits again, and is
+  told about something new.
+- **`OnChange(handler)`** — the schema's own "and when this changes, do that": clear the city when the
+  country changes, fill in the seat count when the plan does. Neither a computed value (which owns its
+  field's value outright) nor a cascading options dependency (which reloads choices) can express it,
+  because what the handler writes is still the user's to edit afterwards. TanStack Form calls these
+  listeners; Formly calls them hooks. Paths resolve relative to the object that owns the field, so a
+  handler on a repeater's template means *that row*, and handlers that answer each other settle rather
+  than recursing.
+
+- **`BlazorFormState.Reset(values)`** — rebases the form onto new data: the values are written, become
+  the new baseline for `Reset()` and `IsFormDirty`, and everything the previous session accumulated is
+  cleared. This is what an edit form needs after a save round-trip returns the stored record;
+  `Reset()` would put back the values the form was *constructed* with, which are now the wrong ones.
+  React Hook Form spells it `reset(values)`.
+- **`ValidateFieldAsync(path)`** — validating one field no longer means finding its definition first.
+  Returns false when the path names nothing in the schema, so a typo does not silently pass. React
+  Hook Form spells it `trigger(name)`.
+- **`GetFieldState(path)`** — touched, dirty, invalid, the first error and every message, in one read.
+  A custom renderer asking all of them separately otherwise has to keep the answers in step itself.
+- **`SwapArrayItems` / `ClearArrayItems`** — the two repeater operations that were missing. A swap
+  exchanges two rows and leaves every other row where it was, which is what a drag-and-drop reorder
+  means; `MoveArrayItem` shuffles everything in between along by one. Clearing empties the list as one
+  change, rather than costing a re-render and a re-index per row.
+- **`BlazorFormState.SingleErrorPerField`** — shows a field's first error instead of every rule it
+  currently breaks, which is React Hook Form's default (`criteriaMode: "firstError"`). Every rule
+  still runs, so the submit decision is unchanged; warnings sit alongside the error rather than
+  competing with it. Off by default.
+- **`BlazorFormView.TitleLevel`** — the form's title is rendered at the heading level the surrounding
+  page needs.
+
 - **Named field groups** — a run of consecutive fields sharing a `Group(...)` name (or
   `[Display(GroupName = …)]`) renders as one `<fieldset>` with a `<legend>`, so the grouping exists for
   a screen reader as well as for the eye. The name round-trips through JSON as `x-group`.
@@ -105,6 +164,54 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **A combobox no longer stores a half-typed label as its value.** `UpdateOnInput()` on one wrote
+  every keystroke straight through, bypassing the label-to-value mapping — so "Fran" became the
+  country, and then "Franc", each flagged in turn as an answer that is on no list. A combobox now
+  always commits when the choice is made, and `Definition.Validate()` reports a schema that asked for
+  anything else — as it now does for every control that can only ever commit (select, radio,
+  multi-select), where the setting was accepted and quietly ignored.
+- **A repeater operation is reported through `OnFieldChanged`.** Adding, removing, moving, swapping,
+  duplicating and clearing rows all changed the value of the field the list binds to and none of them
+  said so, so an autosave or a live preview watching for changes missed every one. Duplicating
+  announces itself once, and only once the copy is actually in the row — the insert underneath it
+  stays quiet, because a listener reacting to that would have saved a blank line.
+- **A dictionary-backed form matches its keys without regard to case**, as every other way a path is
+  resolved already does — a schema lookup, a property on a typed model, the state's own touched, dirty
+  and message tracking. It was the one place where `Email` and `email` were different fields, which is
+  a distinction the library cannot honour anywhere else and which `Definition.Validate()` already
+  reports as two siblings binding to the same path.
+- **A length limit on a tag list is enforced.** `MinLength`/`MaxLength` read the value as a string,
+  found a collection, and passed — so the limit the entry box enforced while typing was never checked
+  on a value that arrived any other way. They now measure each tag. This is the same shape of bug as
+  `[MinLength]` on a collection being mapped to the string rule, and a repeater's items are still the
+  collection-size rule's business rather than this one's.
+- **A tag list is labelled through its group.** The field's `<label for>` pointed at the box a tag is
+  typed into — which disappears once the list is full or the form is read-only, leaving the label
+  aimed at nothing. It is now named the way a radio group is, and the group carries the field's id so
+  the error summary's link still lands.
+- `Definition.Validate()` reports two combobox options sharing a label. The entry is matched back to
+  an option by its label, because that is what the browser puts in the box, so two of them make the
+  user's choice a coin toss.
+- **A computed value now behaves like any other change.** Writing one skipped the three sweeps a
+  typed-in value runs, so a field whose `VisibleWhen` read a total was never cleared when the total
+  hid it, a cascading select that depended on a computed field never reloaded, and `OnFieldChanged`
+  never heard about it at all — the schema's own calculations were the one kind of change the rest of
+  the engine could not see.
+- **A read-only wizard no longer offers to submit itself.** The single-page branch has always hidden
+  its buttons in review mode; the wizard branch rendered Submit and Reset regardless. Back and Next
+  stay — reading a form is not editing it, and a review screen that strands the user on step 1 of 4 is
+  worse than the button it was hiding. `ShowSubmitButton="false"` is now honoured on a wizard too.
+- **`InputAttr(...)` reaches radio, multi-select and file fields.** Those three renderers never
+  splatted the schema's extra attributes, so a `data-testid` or a `title` declared on them silently
+  did nothing. They land on the group element, which is the only thing there is to put them on, and
+  the renderer's own ARIA wiring still wins.
+- **`HideLabel()` works on a checkbox and a switch.** It was the one field type that rendered its
+  label anyway; the visible text now goes and the label survives as the control's accessible name,
+  exactly as it does everywhere else.
+- A multi-select rebuilt its selection set once per option rather than once per render, so a list of
+  200 choices walked the stored value 200 times to draw 200 boxes.
+- `HasErrors` — read by every button on every render through `IsValid` — no longer allocates a pair of
+  LINQ iterators and a closure to answer it.
 - **An unanswered checkbox now counts as false.** `IsTrue` and `IsFalse` were both false for a missing
   value, so the two branches of one yes/no question could hide a field under each — which a
   dictionary-backed form met immediately, since an untouched checkbox has no entry at all while a

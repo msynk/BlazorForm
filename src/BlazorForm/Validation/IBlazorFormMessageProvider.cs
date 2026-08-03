@@ -132,6 +132,28 @@ public static class BlazorFormMessageKeys
 
     /// <summary>Announced once a length-limited field is over its limit. Arg 0 is the excess.</summary>
     public const string CharactersOver = "ui.characters.over";
+
+    /// <summary>
+    /// Announced by a combobox as its list narrows. Arg 0 is the number of matching choices. The
+    /// browser filters a <c>&lt;datalist&gt;</c> silently, so without this a screen-reader user typing
+    /// into the box cannot tell whether anything matches.
+    /// </summary>
+    public const string ComboboxAvailable = "ui.combobox.available";
+
+    /// <summary>Accessible name of a tag's remove button. Arg 0 is the tag.</summary>
+    public const string TagRemove = "ui.tags.remove";
+
+    /// <summary>Accessible name of the box a new tag is typed into. Arg 0 is the field's label.</summary>
+    public const string TagEntry = "ui.tags.entry";
+
+    /// <summary>Placeholder shown in the tag entry box.</summary>
+    public const string TagPlaceholder = "ui.tags.placeholder";
+
+    /// <summary>Live-region text announcing how many tags there are. Arg 0 is the count.</summary>
+    public const string TagCount = "ui.tags.count";
+
+    /// <summary>Message for a combobox answered with something that is not one of its choices.</summary>
+    public const string OneOf = "oneOf";
 }
 
 /// <summary>The English defaults used when no <see cref="IBlazorFormMessageProvider"/> is registered.</summary>
@@ -189,6 +211,12 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.CharacterCount => $"{Arg(args, 0)} / {Arg(args, 1)}",
         BlazorFormMessageKeys.CharactersRemaining => $"{Arg(args, 0)} characters remaining",
         BlazorFormMessageKeys.CharactersOver => $"{Arg(args, 0)} characters over the limit",
+        BlazorFormMessageKeys.ComboboxAvailable => $"{Arg(args, 0)} choices available",
+        BlazorFormMessageKeys.TagRemove => $"Remove {Arg(args, 0)}",
+        BlazorFormMessageKeys.TagEntry => $"Add to {Arg(args, 0)}",
+        BlazorFormMessageKeys.TagPlaceholder => "Add…",
+        BlazorFormMessageKeys.TagCount => $"{Arg(args, 0)} selected",
+        BlazorFormMessageKeys.OneOf => "Choose one of the available options.",
 
         _ => key
     };

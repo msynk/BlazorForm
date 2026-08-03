@@ -85,5 +85,22 @@ public enum BlazorFormFieldType
     /// text box gets. Appended rather than slotted in beside <see cref="Text"/> so no existing member's
     /// numeric value moves.
     /// </summary>
-    Search
+    Search,
+
+    /// <summary>
+    /// A text box that filters a list of choices as the user types — the control every form framework
+    /// ends up adding once a dropdown has more than a screenful of options in it. It stores an option's
+    /// value like a <see cref="Select"/> does, and by default only accepts one of them; set
+    /// <c>AllowCustom()</c> to let the user answer with something that is not on the list.
+    /// </summary>
+    Combobox,
+
+    /// <summary>
+    /// A list of short free-text values entered one at a time and shown as removable chips — labels on
+    /// an issue, skills on a profile, recipients on a message. It binds to a collection exactly as an
+    /// <see cref="Array"/> of strings does; the difference is the affordance, because a repeater gives
+    /// each tag its own row with add, remove and reorder buttons, which is the wrong shape entirely for
+    /// a word.
+    /// </summary>
+    Tags
 }

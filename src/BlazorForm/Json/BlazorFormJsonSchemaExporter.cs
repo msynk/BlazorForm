@@ -295,6 +295,10 @@ public static class BlazorFormJsonSchemaExporter
         BlazorFormFieldType.TextArea => ("string", null, "textarea"),
         BlazorFormFieldType.Radio => ("string", null, "radio"),
         BlazorFormFieldType.MultiSelect => ("array", null, "multiselect"),
+        // A combobox stores one of the enumerated values, exactly as a select does; only the control
+        // differs, which is precisely what x-widget is for.
+        BlazorFormFieldType.Combobox => ("string", null, "combobox"),
+        BlazorFormFieldType.Tags => ("array", null, "tags"),
         BlazorFormFieldType.Tel => ("string", null, "tel"),
         BlazorFormFieldType.Search => ("string", null, "search"),
         BlazorFormFieldType.File => ("string", "binary", "file"),

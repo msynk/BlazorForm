@@ -1,0 +1,180 @@
+@namespace BlazorForm
+@inherits BlazorFormInputBase
+@using System.Collections
+
+@* A list of short values, shown as chips. The same data an Array of strings holds, with the
+   affordance a word deserves: a repeater gives every tag its own row with add, remove, duplicate and
+   reorder buttons, which is the right shape for an invoice line and the wrong one for "urgent". *@
+@* The id sits on the group, not on the entry box: the box comes and goes with the list's capacity and
+   the form's read-only flag, and the error summary's link to this field has to survive that. *@
+<div @attributes="ExtraAttributes"
+     id="@Context.ElementId"
+     class="@(Context.HasError && Context.ShowMessages ? "ff-tags ff-tags--invalid" : "ff-tags")"
+     @ref="Element"
+     tabindex="-1"
+     role="group"
+     aria-labelledby="@(Field.ShowLabel ? Context.LabelId : null)"
+     aria-label="@AriaLabel"
+     aria-required="@AriaRequired"
+     aria-invalid="@AriaInvalid"
+     aria-describedby="@DescribedBy">
+    @{ var tags = Tags; }
+    @foreach (var tag in tags)
+    {
+        var value = tag;
+        <span class="ff-tag" @key="value">
+            <span class="ff-tag__label">@value</span>
+            @if (!DisabledOrReadOnly)
+            {
+                @* The visible × is decorative; the accessible name says which tag it removes, because
+                   a screen-reader user hearing "remove button" five times learns nothing. *@
+                <button type="button" class="ff-tag__remove"
+                        title="@RemoveLabel(value)" aria-label="@RemoveLabel(value)"
+                        @onclick="@(() => RemoveAsync(value))">×</button>
+            }
+        </span>
+    }
+
+    @if (!DisabledOrReadOnly && CanAdd)
+    {
+        @* form="…_none" points at no element, so this box has no form owner and pressing Enter in it
+           cannot trigger the form's implicit submission. Enter is how a tag input is used — every one
+           of them works this way — and without this the first tag a user types would post the form.
+           Blazor reads the value through events, never through a native submit, so belonging to no
+           form costs the control nothing. *@
+        <input class="ff-tags__entry"
+               id="@(Context.ElementId)_entry"
+               form="@(Context.ElementId)_none"
+               type="text"
+               value="@_draft"
+               placeholder="@EntryPlaceholder"
+               maxlength="@Field.MaxLength"
+               aria-label="@EntryLabel"
+               @oninput="OnDraftChanged"
+               @onkeydown="OnKeyDown"
+               @onblur="OnEntryBlur" />
+    }
+
+    @* Announces the count after every add and remove; the chips themselves are silent. *@
+    <p class="ff-sr-only" aria-live="polite">@Announcement</p>
+</div>
+
+@code {
+    private string _draft = "";
+
+    /// <summary>
+    /// The tags currently held. Written back as a <c>List&lt;string&gt;</c>; the data accessor converts
+    /// each element to whatever the model's collection actually holds.
+    /// </summary>
+    private List<string> Tags
+    {
+        get
+        {
+            var list = new List<string>();
+            if (Context.Value is IEnumerable items and not string)
+            {
+                foreach (var item in items)
+                    if (item is not null) list.Add(BlazorFormValueConverter.ToInvariantString(item));
+            }
+            else if (Context.Value is string single && single.Length > 0)
+            {
+                list.Add(single);
+            }
+            return list;
+        }
+    }
+
+    /// <summary>Whether another tag may be added, given <see cref="BlazorFormFieldDefinition.MaxItems"/>.</summary>
+    private bool CanAdd => Field.MaxItems is not { } max || Tags.Count < max;
+
+    /// <summary>
+    /// Characters that end a tag as well as Enter does. Pasting "a, b, c" into a tag box and getting
+    /// one tag called "a, b, c" is the classic disappointment; <c>Attr("tagSeparators", ";")</c>
+    /// changes the set, and an empty string leaves Enter as the only way.
+    /// </summary>
+    private string Separators => Attr("tagSeparators", ",")!;
+
+    private async Task OnDraftChanged(ChangeEventArgs e)
+    {
+        var raw = e.Value?.ToString() ?? "";
+
+        // A separator commits everything before it, so typing and pasting behave the same way.
+        if (Separators.Length > 0 && raw.IndexOfAny(Separators.ToCharArray()) >= 0)
+        {
+            var parts = raw.Split(Separators.ToCharArray());
+            _draft = parts[^1];
+            for (var i = 0; i < parts.Length - 1; i++) await CommitAsync(parts[i]);
+            return;
+        }
+
+        _draft = raw;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Enter":
+                var pending = _draft;
+                // Cleared before the write, so the re-render the write triggers empties the box.
+                _draft = "";
+                await CommitAsync(pending);
+                break;
+            // Backspace on an empty box removes the last tag — how every tag input behaves, and the
+            // only way to undo a tag without reaching for the mouse.
+            case "Backspace" when _draft.Length == 0:
+                var tags = Tags;
+                if (tags.Count > 0) await RemoveAsync(tags[^1]);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Commits whatever is half-typed when focus leaves. Discarding it would lose a tag the user
+    /// believes they entered — the same reason a debounced text field flushes on blur.
+    /// </summary>
+    private async Task OnEntryBlur()
+    {
+        var pending = _draft;
+        _draft = "";
+        await CommitAsync(pending);
+        await Context.BlurAsync();
+    }
+
+    private Task CommitAsync(string raw)
+    {
+        var tag = raw.Trim();
+        if (tag.Length == 0) return Task.CompletedTask;
+
+        var tags = Tags;
+        if (Field.MaxItems is { } max && tags.Count >= max) return Task.CompletedTask;
+        // Case-insensitive, because "Urgent" and "urgent" are the same label to everyone but the
+        // computer, and a list that holds both is a bug report waiting to happen.
+        if (tags.Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase))) return Task.CompletedTask;
+
+        tags.Add(tag);
+        return Context.SetValueAsync(tags);
+    }
+
+    private Task RemoveAsync(string tag)
+    {
+        var tags = Tags;
+        tags.RemoveAll(t => string.Equals(t, tag, StringComparison.Ordinal));
+        return Context.SetValueAsync(tags);
+    }
+
+    private string RemoveLabel(string tag) => Context.Text(BlazorFormMessageKeys.TagRemove, tag);
+
+    private string EntryLabel => Context.Text(BlazorFormMessageKeys.TagEntry, Field.Label ?? Field.Name);
+
+    private string? EntryPlaceholder => Field.Placeholder ?? Context.Text(BlazorFormMessageKeys.TagPlaceholder);
+
+    private string Announcement
+    {
+        get
+        {
+            var count = Tags.Count;
+            return count == 0 ? "" : Context.Text(BlazorFormMessageKeys.TagCount, count);
+        }
+    }
+}

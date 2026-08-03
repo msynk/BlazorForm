@@ -11,8 +11,26 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
 {
     private readonly Dictionary<string, object?> _root;
 
+    /// <summary>
+    /// Keys are matched without regard to case, because every other way a path is resolved already is:
+    /// a schema lookup (<see cref="BlazorFormDefinition.FindByPath"/>), a property on a typed model,
+    /// and the state's own touched/dirty/message tracking. A dictionary-backed form was the one place
+    /// where <c>Email</c> and <c>email</c> were different fields — which is not a distinction the
+    /// library can honour anywhere else, and <see cref="BlazorFormDefinition.Validate"/> already
+    /// reports two siblings whose names differ only in case as binding to the same path.
+    /// </summary>
+    private static readonly StringComparer KeyComparer = StringComparer.OrdinalIgnoreCase;
+
     public BlazorFormDictionaryDataAccessor(IDictionary<string, object?>? initial = null)
-        => _root = initial is null ? new() : new(initial);
+    {
+        _root = new Dictionary<string, object?>(KeyComparer);
+        if (initial is null) return;
+
+        // Copied one at a time rather than through the copy constructor: a caller's dictionary may hold
+        // keys that differ only in case, and that constructor throws on the collision. Last one wins,
+        // which is what the store would have ended up with anyway.
+        foreach (var (key, value) in initial) _root[key] = value;
+    }
 
     public object? Root => _root;
 
@@ -141,7 +159,14 @@ public sealed class BlazorFormDictionaryDataAccessor : IBlazorFormDataAccessor
     public Type? GetElementType(string arrayPath) => typeof(object);
 
     private static object CreateContainer(BlazorFormPathSegment next)
-        => next.IsIndex ? new List<object?>() : new Dictionary<string, object?>();
+        => next.IsIndex ? new List<object?>() : NewObject();
+
+    /// <summary>
+    /// A nested object in the store. Public so a caller creating an array item by hand — or the form
+    /// state creating one for a repeater — gets a container that resolves keys the same way the root
+    /// does, rather than a case-sensitive one nested inside a case-insensitive store.
+    /// </summary>
+    public static Dictionary<string, object?> NewObject() => new(KeyComparer);
 
     /// <summary>Whether an existing value is already the right kind of container for the next segment.</summary>
     private static bool IsContainerFor(object? existing, BlazorFormPathSegment next)

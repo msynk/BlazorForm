@@ -11,9 +11,12 @@
 <form @attributes="AdditionalAttributes"
       class="ff-form @(Class)" novalidate aria-busy="@(Working ? "true" : null)"
       @onsubmit="HandleSubmit" @onsubmit:preventDefault="true">
+    @* role="heading" rather than a fixed <h2>, for the same reason the Static field carries one: the
+       form is rendered inside a page whose outline the library cannot know, and a form dropped under
+       an <h3> would otherwise skip a level. Set TitleLevel to place it. *@
     @if (!string.IsNullOrEmpty(FormState.Definition.Title))
     {
-        <h2 class="ff-form__title">@FormState.Definition.Title</h2>
+        <div class="ff-form__title" role="heading" aria-level="@TitleHeadingLevel">@FormState.Definition.Title</div>
     }
     @if (!string.IsNullOrEmpty(FormState.Definition.Description))
     {
@@ -32,6 +35,12 @@
     @if (FormLevelMessages.Count > 0 && !ShowErrorSummary)
     {
         <BlazorFormValidationMessages Messages="FormLevelMessages" Show="FormState.IsSubmitted" Id="ff_form_errors" />
+    }
+
+    @* Silent unless nothing else reports the outcome — see SubmitAnnouncement. *@
+    @if (SubmitAnnouncement is { } announcement)
+    {
+        <p class="ff-sr-only" role="status">@announcement</p>
     }
 
     @if (FormState.Definition.IsWizard)
@@ -96,16 +105,20 @@
             }
             else
             {
+                @* A read-only wizard keeps Back and Next — paging through a form to read it is not
+                   editing it, and a review screen that strands the user on step 1 of 4 is useless —
+                   but loses Submit and Reset, which are the two buttons that would change something.
+                   The single-page branch below has always hidden its buttons for the same reason. *@
                 <button type="button" class="ff-btn" disabled="@(FormState.IsFirstStep || Busy)" @onclick="Previous">@BackLabel</button>
-                @if (FormState.IsLastStep)
-                {
-                    <button type="submit" class="ff-btn ff-btn--primary" disabled="@Busy">@SubmitLabel</button>
-                }
-                else
+                @if (!FormState.IsLastStep)
                 {
                     <button type="button" class="ff-btn ff-btn--primary" disabled="@Busy" @onclick="Next">@NextLabel</button>
                 }
-                @if (ShowResetButton)
+                else if (!FormState.ReadOnly && ShowSubmitButton)
+                {
+                    <button type="submit" class="ff-btn ff-btn--primary" disabled="@Busy">@SubmitLabel</button>
+                }
+                @if (ShowResetButton && !FormState.ReadOnly)
                 {
                     <button type="button" class="ff-btn ff-btn--ghost" disabled="@Busy" @onclick="Reset">@ResetLabel</button>
                 }
@@ -181,6 +194,14 @@
     [Parameter] public bool ShowSubmitButton { get; set; } = true;
 
     /// <summary>
+    /// The heading level of the form's title, 1-6 (default 2). A form is rendered inside a page whose
+    /// outline the library cannot know, so where the title sits in it has to be the caller's choice —
+    /// a form under an <c>&lt;h3&gt;</c> whose title insisted on being an <c>&lt;h2&gt;</c> makes the
+    /// page's structure wrong for everyone navigating it by headings.
+    /// </summary>
+    [Parameter] public int TitleLevel { get; set; } = 2;
+
+    /// <summary>
     /// Button labels. Leave them unset and the text comes from the registered
     /// <see cref="IBlazorFormMessageProvider"/>, so a localised app does not have to pass four strings
     /// to every form it renders.
@@ -252,8 +273,33 @@
     // live above a set of controls nobody can fill in. It is not, however, busy.
     private bool Busy => Working || FormState.Disabled;
 
+    private int TitleHeadingLevel => Math.Clamp(TitleLevel, 1, 6);
+
     /// <summary>Messages a form-level rule reported without naming a field.</summary>
     private IReadOnlyList<BlazorFormValidationMessage> FormLevelMessages => FormState.MessagesFor(string.Empty);
+
+    /// <summary>
+    /// What a polite live region says after a failed submit, or null when it should stay silent.
+    /// </summary>
+    /// <remarks>
+    /// Only when nothing else is already telling the user: the error summary announces itself and
+    /// takes focus, and focus-the-first-error lands on a control whose message is read out through
+    /// <c>aria-describedby</c>. With both turned off, a screen-reader user presses Submit, the page
+    /// does not move, and nothing at all is said — which reads as a button that does nothing.
+    /// </remarks>
+    private string? SubmitAnnouncement
+    {
+        get
+        {
+            if (ShowErrorSummary || FocusFirstError) return null;
+            if (!FormState.IsSubmitted || FormState.IsValidating || !FormState.HasErrors) return null;
+
+            var count = FormState.OrderedMessages().Count(m => m.Severity == BlazorFormValidationSeverity.Error);
+            return count == 1
+                ? FormState.Text(BlazorFormMessageKeys.SummaryTitleOne)
+                : FormState.Text(BlazorFormMessageKeys.SummaryTitleMany, count);
+        }
+    }
 
     /// <summary>The top-level fields, each with the path it binds to.</summary>
     private IEnumerable<(BlazorFormFieldDefinition Field, string Path)> RootItems

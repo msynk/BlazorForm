@@ -278,6 +278,8 @@ public static class BlazorFormJsonSchemaImporter
             "textarea" => BlazorFormFieldType.TextArea,
             "radio" => BlazorFormFieldType.Radio,
             "multiselect" => BlazorFormFieldType.MultiSelect,
+            "combobox" => BlazorFormFieldType.Combobox,
+            "tags" => BlazorFormFieldType.Tags,
             "range" => BlazorFormFieldType.Range,
             "color" => BlazorFormFieldType.Color,
             "tel" => BlazorFormFieldType.Tel,

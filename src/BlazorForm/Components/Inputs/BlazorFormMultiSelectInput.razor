@@ -6,7 +6,9 @@
    otherwise, so suppressing the visible label never leaves the group without an accessible name. *@
 @* See BlazorFormRadioInput on the tabindex: the group is what focus aims at, because no single
    checkbox in it represents the field. *@
-<div class="ff-multiselect"
+@* Splat first: the schema's extra attributes land on the group, and everything below overrides them. *@
+<div @attributes="ExtraAttributes"
+     class="ff-multiselect"
      @ref="Element"
      tabindex="-1"
      role="group"
@@ -15,15 +17,18 @@
      aria-required="@AriaRequired"
      aria-invalid="@AriaInvalid"
      aria-describedby="@DescribedBy">
-    @for (var index = 0; index < Context.Options.Count; index++)
+    @* Resolved once per render, not once per option: the set is derived by walking the stored value,
+       so asking for it inside the loop makes a list of 200 choices do 200 walks to render 200 boxes. *@
+    @{ var selected = Selected; var options = Context.Options; }
+    @for (var index = 0; index < options.Count; index++)
     {
-        var opt = Context.Options[index];
+        var opt = options[index];
         var optionId = BlazorFormFieldContext.OptionId(Context.ElementId, index, opt.Value);
         <label class="ff-checkbox" for="@optionId">
             <input type="checkbox"
                    id="@optionId"
                    value="@opt.Value"
-                   checked="@Selected.Contains(opt.Value)"
+                   checked="@selected.Contains(opt.Value)"
                    disabled="@(DisabledOrReadOnly || opt.Disabled)"
                    @onchange="@(e => Toggle(opt.Value, e.Value is bool b && b))"
                    @onblur="OnBlur" />

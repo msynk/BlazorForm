@@ -182,6 +182,42 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 .ff-checkbox:has(input:disabled), .ff-radio:has(input:disabled) { cursor: not-allowed; color: var(--ff-muted); }
 .ff-radio-group, .ff-multiselect { display: flex; flex-direction: column; gap: .4rem; }
 
+/* Combobox — the control is a plain input; the browser draws the filtered list itself. */
+.ff-combobox { display: flex; flex-direction: column; }
+
+/* Tags. The box looks like a single input, because that is what it is to the person using it: the
+   chips and the entry field share one border and one focus ring. */
+.ff-tags {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+    inline-size: 100%; box-sizing: border-box;
+    background: var(--ff-surface); color: var(--ff-text);
+    border: 1px solid var(--ff-border); border-radius: var(--ff-radius);
+    padding: .35rem .45rem; min-block-size: 2.5rem;
+}
+.ff-tags:focus-within { border-color: var(--ff-border-focus); outline: 2px solid var(--ff-border-focus); outline-offset: 1px; }
+.ff-tags--invalid { border-color: var(--ff-error); }
+.ff-tag {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: var(--ff-surface-muted); border: 1px solid var(--ff-border);
+    border-radius: 999px; padding: .1rem .25rem .1rem .6rem; font-size: .85rem;
+    max-inline-size: 100%;
+}
+.ff-tag__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-tag__remove {
+    display: inline-flex; align-items: center; justify-content: center;
+    inline-size: 1.15rem; block-size: 1.15rem; flex: none;
+    border: none; border-radius: 999px; background: transparent;
+    color: var(--ff-muted); font-size: .95rem; line-height: 1; cursor: pointer; padding: 0;
+}
+.ff-tag__remove:hover { background: var(--ff-error-surface); color: var(--ff-error); }
+.ff-tag__remove:focus-visible { outline: 2px solid var(--ff-border-focus); outline-offset: 1px; }
+/* The entry box grows to fill the row it lands on, so a half-full row is still a click target. */
+.ff-tags__entry {
+    flex: 1 1 6rem; min-inline-size: 6rem;
+    border: none; outline: none; background: transparent; color: inherit;
+    font: inherit; padding: .15rem .1rem;
+}
+
 .ff-range { display: flex; align-items: center; gap: .75rem; }
 .ff-range__slider { flex: 1; accent-color: var(--ff-accent); }
 .ff-range__value { min-inline-size: 2.5rem; text-align: end; font-variant-numeric: tabular-nums; color: var(--ff-muted); }
@@ -297,6 +333,7 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
    tight against the content, so it gets some room. */
 .ff-step-body:focus-visible,
 .ff-radio-group:focus-visible,
+.ff-tags:focus-visible,
 .ff-multiselect:focus-visible {
     outline: 2px solid var(--ff-accent);
     outline-offset: 4px;

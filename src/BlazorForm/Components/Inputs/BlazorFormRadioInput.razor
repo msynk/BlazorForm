@@ -7,7 +7,11 @@
 @* tabindex="-1" so "take me to this field" has somewhere to land. A radio group has no single control
    to focus, and landing on the group itself makes the screen reader announce the group's name and role
    before the user arrows through the options — which is how a radio group is meant to be navigated. *@
-<div class="ff-radio-group"
+@* Splat first, exactly as every other renderer does: the schema's extra attributes land on the group
+   (there is no single control to put them on), and everything below overrides them so a stray
+   aria-labelledby cannot unhook the group's name. *@
+<div @attributes="ExtraAttributes"
+     class="ff-radio-group"
      @ref="Element"
      tabindex="-1"
      role="radiogroup"

@@ -124,6 +124,45 @@ public sealed class BlazorFormFieldBuilder
     public BlazorFormFieldBuilder AsFile() { _field.Type = BlazorFormFieldType.File; return this; }
 
     /// <summary>
+    /// Renders the field as a combobox: a text box that filters the options as the user types. This is
+    /// what a dropdown with more than a screenful of choices should have been all along — a
+    /// <c>&lt;select&gt;</c> of 200 countries is navigated by scrolling, and a
+    /// <see cref="Suggest(string[])"/> datalist proposes without ever restricting.
+    /// </summary>
+    /// <param name="allowCustom">
+    /// Whether an answer that is on no list is accepted. False (the default) adds a rule reporting it,
+    /// so the field is a closed choice; true makes the list a shortcut rather than a constraint, which
+    /// is what a "city" box that must also accept somewhere obscure needs.
+    /// </param>
+    /// <remarks>
+    /// The rule can only check options the schema itself declares. Choices that arrive through
+    /// <see cref="OptionsFrom(BlazorFormOptionsProvider, string[])"/> live in the form's runtime state
+    /// rather than in the schema, so they are not checked here — validate those on the server, where
+    /// the same lookup lives.
+    /// </remarks>
+    public BlazorFormFieldBuilder AsCombobox(bool allowCustom = false)
+    {
+        _field.Type = BlazorFormFieldType.Combobox;
+        if (allowCustom) _field.RemoveValidators("oneOf");
+        else _field.AddValidator(new BlazorFormOneOfRule());
+        return this;
+    }
+
+    /// <summary>
+    /// Renders a collection of short strings as removable chips with one box to type the next into —
+    /// labels, skills, recipients. The same data an <c>ArrayOf(..., Text)</c> holds; the difference is
+    /// that a repeater gives every entry its own row with add, remove, duplicate and reorder buttons,
+    /// which is the right shape for an invoice line and the wrong one for a word.
+    /// </summary>
+    /// <param name="max">An optional cap on how many tags may be added.</param>
+    public BlazorFormFieldBuilder AsTags(int? max = null)
+    {
+        _field.Type = BlazorFormFieldType.Tags;
+        if (max is { } limit) Items(_field.MinItems, limit);
+        return this;
+    }
+
+    /// <summary>
     /// Adds a "show the characters" toggle to a password field. Opt-in, because whether a password may
     /// be revealed at all is a decision about the environment the form runs in — a shared screen, a
     /// recorded session — rather than about the field.
@@ -199,6 +238,25 @@ public sealed class BlazorFormFieldBuilder
     {
         _field.Computed = compute;
         foreach (var d in dependsOn) _field.ComputedDependencies.Add(d);
+        return this;
+    }
+
+    /// <summary>
+    /// Runs when this field's value changes — the schema's own "and when this changes, do that".
+    /// Clearing the city when the country changes, resetting a seat count when the plan does: the
+    /// things that fit neither <see cref="Computed"/> (which owns its field's value outright) nor
+    /// <see cref="OptionsFrom(BlazorFormOptionsProvider, string[])"/> (which reloads choices), because
+    /// what the handler writes is still the user's to edit afterwards.
+    /// </summary>
+    /// <remarks>
+    /// Paths inside the handler resolve relative to the object that owns the field, exactly as
+    /// conditions and computed dependencies do, so a handler on a repeater's item template means
+    /// <em>that row</em>. It is not run while the form is being constructed — applying a default is not
+    /// a change the user made.
+    /// </remarks>
+    public BlazorFormFieldBuilder OnChange(BlazorFormChangeHandler handler)
+    {
+        _field.OnChanged = handler;
         return this;
     }
 
@@ -431,6 +489,11 @@ public sealed class BlazorFormFieldBuilder
     /// </summary>
     public BlazorFormFieldBuilder ClearOnHide(bool value = true) { _field.ClearOnHide = value; return this; }
 
+    /// <summary>
+    /// Gives a field that has just been handed options a control that can show them — unless it already
+    /// has one. A combobox is a choice field too: it renders its options as a filtered list, so
+    /// declaring options on one must not silently turn it back into a dropdown.
+    /// </summary>
     private void EnsureChoiceType()
     {
         if (!_field.IsChoice) _field.Type = BlazorFormFieldType.Select;
