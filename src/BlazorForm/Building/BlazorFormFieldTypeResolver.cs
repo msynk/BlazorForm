@@ -43,6 +43,13 @@ public static class BlazorFormFieldTypeResolver
         if (GetEnumerableElementType(t) is { } element && (IsBrowserFile(element) || element == typeof(byte[])))
             return BlazorFormFieldType.File;
 
+        // A collection of enum members is a closed set of choices, so it is one multi-select rather
+        // than a repeater. The repeater is right for a list of things the user writes; it is absurd
+        // for a list drawn from three fixed answers — "add a row, open a dropdown, pick Monday; add a
+        // row, open a dropdown, pick Tuesday" instead of ticking two boxes. A [Flags] enum has always
+        // rendered this way; a List<TDay> holds exactly the same information.
+        if (GetEnumElementType(t) is not null) return BlazorFormFieldType.MultiSelect;
+
         if (typeof(IEnumerable).IsAssignableFrom(t)) return BlazorFormFieldType.Array;
 
         if (t.IsClass || (t.IsValueType && !t.IsPrimitive)) return BlazorFormFieldType.Object;
@@ -53,6 +60,18 @@ public static class BlazorFormFieldTypeResolver
     /// <summary>Whether a type is, or implements, Blazor's <c>IBrowserFile</c>.</summary>
     private static bool IsBrowserFile(Type type)
         => typeof(Microsoft.AspNetCore.Components.Forms.IBrowserFile).IsAssignableFrom(type);
+
+    /// <summary>
+    /// The enum type a collection holds, or null when <paramref name="type"/> is not a collection of
+    /// enum members. <c>List&lt;DayOfWeek?&gt;</c> counts: the nullability is about the element, not
+    /// about what the choices are.
+    /// </summary>
+    public static Type? GetEnumElementType(Type type)
+    {
+        if (GetEnumerableElementType(type) is not { } element) return null;
+        var underlying = Nullable.GetUnderlyingType(element) ?? element;
+        return underlying.IsEnum ? underlying : null;
+    }
 
     /// <summary>Gets the element type of an enumerable/array type, or null when the type is not a collection.</summary>
     public static Type? GetEnumerableElementType(Type type)

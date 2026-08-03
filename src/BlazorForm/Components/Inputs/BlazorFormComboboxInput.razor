@@ -53,20 +53,24 @@
 </div>
 
 @code {
+    // No role="combobox" and no aria-expanded, deliberately. An <input> carrying a `list` already *is*
+    // a combobox to the accessibility tree — the browser maps it for us — and declaring the role again
+    // takes on its contract: aria-expanded then has to say whether the popup is open, which is state
+    // only the browser has and never exposes. A hard-coded "false" is not a simplification, it is an
+    // assertion that the list is closed, told to a screen-reader user at the exact moment it is open.
+    //
     // Splat first so the renderer's own id and ARIA wiring below always wins.
     private RenderFragment Control => @<input @attributes="ExtraAttributes"
                                               id="@Context.ElementId"
                                               @ref="Element"
                                               class="@CssClass"
                                               type="text"
-                                              role="combobox"
                                               list="@ListId"
                                               value="@DisplayText"
                                               placeholder="@Field.Placeholder"
                                               disabled="@Disabled"
                                               readonly="@ReadOnly"
                                               autocomplete="off"
-                                              aria-expanded="false"
                                               aria-autocomplete="list"
                                               aria-required="@AriaRequired"
                                               aria-invalid="@AriaInvalid"

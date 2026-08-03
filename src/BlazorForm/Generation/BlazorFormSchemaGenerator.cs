@@ -36,7 +36,13 @@ public static class BlazorFormSchemaGenerator
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
             .Where(p => !ShouldSkip(p, options))
-            .OrderBy(p => p.MetadataToken);
+            // Inherited properties come first, then the type's own — the order the class reads in, and
+            // the order anyone declaring `Article : Document` expects. Metadata tokens alone cannot say
+            // this: they run in file order, so moving the base class below the derived one in the same
+            // file silently reordered the form, and across assemblies they are two unrelated sequences
+            // whose interleaving means nothing at all.
+            .OrderBy(p => InheritanceDistance(type, p.DeclaringType))
+            .ThenBy(p => p.MetadataToken);
 
         var list = new List<BlazorFormFieldDefinition>();
         foreach (var prop in props)
@@ -65,6 +71,13 @@ public static class BlazorFormSchemaGenerator
         {
             // Resolve() already chose Select or MultiSelect depending on [Flags].
             foreach (var option in BlazorFormEnumOptions.For(underlying))
+                field.Options.Add(option);
+        }
+        else if (BlazorFormFieldTypeResolver.GetEnumElementType(underlying) is { } elementEnum)
+        {
+            // A collection of enum members: Resolve() made it a multi-select, and the choices are the
+            // element type's, not the collection's.
+            foreach (var option in BlazorFormEnumOptions.For(elementEnum))
                 field.Options.Add(option);
         }
         else if (fieldType == BlazorFormFieldType.File)
@@ -113,6 +126,23 @@ public static class BlazorFormSchemaGenerator
                 scalar.Options.Add(option);
         }
         return scalar;
+    }
+
+    /// <summary>
+    /// How many levels above <paramref name="type"/> a property was declared. Larger means further up
+    /// the hierarchy, so sorting descending puts the root base class's properties first. An unknown
+    /// declaring type (an interface's property on a type that never implemented it explicitly) sorts
+    /// with the type's own, which is where the rest of the sort leaves it anyway.
+    /// </summary>
+    private static int InheritanceDistance(Type type, Type? declaring)
+    {
+        if (declaring is null) return 0;
+
+        var depth = 0;
+        for (var current = type; current is not null; current = current.BaseType, depth++)
+            if (current == declaring) return -depth;
+
+        return 0;
     }
 
     private static bool ShouldSkip(PropertyInfo prop, BlazorFormSchemaGeneratorOptions options)

@@ -41,6 +41,45 @@ internal static class BlazorFormNumber
         }
     }
 
+    /// <summary>
+    /// Widens a date, time or timestamp to the same OLE automation number the schema stores bounds as,
+    /// so a date window can be checked by the one numeric range rule the rest of the library uses.
+    /// </summary>
+    /// <remarks>
+    /// A time of day is the fraction of a day it represents — which is precisely its OLE automation
+    /// value on day zero, so <c>09:00</c> compares equal whether it arrived as a <see cref="TimeOnly"/>,
+    /// a <see cref="TimeSpan"/> or the string <c>"09:00"</c>. Parsing tries a time before a date for the
+    /// same reason: <c>DateTime.Parse("09:00")</c> silently attaches <em>today</em> to it, which would
+    /// put the bound and the value hundreds of thousands apart.
+    /// </remarks>
+    public static bool TryToOADate(object? value, out double result)
+    {
+        switch (value)
+        {
+            case DateTime dt: result = dt.ToOADate(); return true;
+            case DateTimeOffset dto: result = dto.DateTime.ToOADate(); return true;
+            case DateOnly d: result = d.ToDateTime(TimeOnly.MinValue).ToOADate(); return true;
+            case TimeOnly t: result = t.ToTimeSpan().TotalDays; return true;
+            case TimeSpan ts: result = ts.TotalDays; return true;
+            case string s:
+                if (TimeOnly.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+                {
+                    result = time.ToTimeSpan().TotalDays;
+                    return true;
+                }
+                if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+                {
+                    result = parsed.ToOADate();
+                    return true;
+                }
+                result = 0;
+                return false;
+            default:
+                result = 0;
+                return false;
+        }
+    }
+
     /// <summary>Formats a number for an HTML attribute — always invariant, so <c>1.5</c> never becomes <c>1,5</c>.</summary>
     public static string? ToAttribute(double? value)
         => value?.ToString("R", CultureInfo.InvariantCulture);

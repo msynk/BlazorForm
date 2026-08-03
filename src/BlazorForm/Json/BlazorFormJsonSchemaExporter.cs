@@ -216,6 +216,7 @@ public static class BlazorFormJsonSchemaExporter
 
         BlazorFormConditionJson.WriteIfRepresentable(writer, "x-visibleWhen", field.VisibleWhen);
         BlazorFormConditionJson.WriteIfRepresentable(writer, "x-disabledWhen", field.DisabledWhen);
+        BlazorFormConditionJson.WriteIfRepresentable(writer, "x-readOnlyWhen", field.ReadOnlyWhen);
         BlazorFormConditionJson.WriteIfRepresentable(writer, "x-requiredWhen", field.RequiredWhen);
     }
 
@@ -295,7 +296,11 @@ public static class BlazorFormJsonSchemaExporter
         BlazorFormFieldType.Number => ("number", null, null),
         BlazorFormFieldType.Range => ("number", null, "range"),
         BlazorFormFieldType.Checkbox => ("boolean", null, null),
-        BlazorFormFieldType.Array => ("array", null, null),
+        // A repeater says so explicitly. `"type": "array"` alone is ambiguous — a set of tick boxes is
+        // an array too — and a document that does not name its control is read with the friendlier
+        // default, which for a closed set of choices is a multi-select. Naming it keeps a schema this
+        // library exported coming back as the form it left as.
+        BlazorFormFieldType.Array => ("array", null, "array"),
         BlazorFormFieldType.Email => ("string", "email", null),
         BlazorFormFieldType.Password => ("string", "password", null),
         BlazorFormFieldType.Url => ("string", "uri", null),

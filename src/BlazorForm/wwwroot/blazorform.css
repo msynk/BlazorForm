@@ -16,10 +16,13 @@
     --ff-muted: #6b7280;
     --ff-radius: 8px;
     --ff-gap: 1rem;
+    /* A token like the rest, so widening a form is one override rather than a selector fight with a
+       hard-coded rule. `none` is a legitimate value for a form that fills its container. */
+    --ff-max-width: 720px;
 
     color: var(--ff-text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    max-width: 720px;
+    max-width: var(--ff-max-width);
 }
 
 /* Follows the OS setting unless the host app has already themed the form. An app with its own theme
@@ -330,10 +333,16 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 
 /* These containers are focusable only so a step change or an error jump has somewhere to land. The
    outline is deliberate — it tells the user where they now are — but the default browser one is drawn
-   tight against the content, so it gets some room. */
+   tight against the content, so it gets some room.
+
+   .ff-file belongs here for the same reason the others do: <InputFile> is a component rather than an
+   element, so the wrapper is what focus lands on. Leaving it out meant "take me to the first error"
+   moved focus onto a required file field and drew nothing at all — a keyboard user pressed submit,
+   was told there was a problem, and had no way to see where they had just been sent. */
 .ff-step-body:focus-visible,
 .ff-radio-group:focus-visible,
 .ff-tags:focus-visible,
+.ff-file:focus-visible,
 .ff-multiselect:focus-visible {
     outline: 2px solid var(--ff-accent);
     outline-offset: 4px;

@@ -13,7 +13,8 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 - **Validation** – built-in rules (required, length, range, pattern, email, URL, compare, multiple-of, unique items, collection size, file size/type), custom sync/async rules, form-level cross-field rules, and optional [FluentValidation](https://docs.fluentvalidation.net/) integration.
 - **Dependent revalidation** – `RevalidateOn(...)` runs a field's rules again when the *other* field they read changes, so fixing the password clears the confirmation's error instead of leaving it stranded.
 - **Validation modes** – choose when fields revalidate before and after the first submit (`OnSubmit` / `OnBlur` / `OnChange`).
-- **Conditional behaviour** – show/hide, disable, or conditionally require fields and wizard steps based on other values, and clear hidden values so abandoned branches never reach your model.
+- **Conditional behaviour** – show/hide, disable, lock (read-only), or conditionally require fields and wizard steps based on other values, and clear hidden values so abandoned branches never reach your model.
+- **Value normalisation** – `Trim()` and `Normalize(...)` tidy an answer when the user leaves the field and again on submit, so a rule never has to reject `" a@b.com "` for its spaces.
 - **Async & cascading options** – load select options from a service and reload them when a dependency changes.
 - **Computed values** – derive a field from the rest of the form (totals, full names), including per-row formulas inside a repeater.
 - **Change handlers** – `OnChange(...)` puts "when the country changes, clear the city" in the schema, where the rest of the field's behaviour already lives.
@@ -51,7 +52,8 @@ Add the stylesheet to your host page:
 <link rel="stylesheet" href="_content/BlazorForm/blazorform.css" />
 ```
 
-Every colour is a CSS custom property on `.ff-form`, and the default theme follows the OS light/dark preference.
+Every colour — plus the corner radius, the field gap and the form's `--ff-max-width` — is a CSS custom
+property on `.ff-form`, and the default theme follows the OS light/dark preference.
 
 ## Quick start
 
@@ -151,6 +153,11 @@ The importer covers draft-07 through 2020-12: `type` (including nullable unions 
 (merged), `if`/`then`/`else` and `dependentRequired`/`dependencies` — the last two mapped onto
 conditional requiredness.
 
+An array of a closed set of choices that may not repeat
+(`{"type":"array","uniqueItems":true,"items":{"enum":[…]}}`) imports as a multi-select rather than a
+repeater of dropdowns — the same rule react-jsonschema-form uses. Without `uniqueItems` the document
+is explicitly allowing the same value twice, which only a repeater can express, so it stays one.
+
 `anyOf`/`oneOf` is handled for the two shapes that describe a single control: a null union
 (`{"anyOf":[{"type":"string"},{"type":"null"}]}`) collapses to the branch it wraps, and a list of
 `const` branches with titles becomes a labelled select. A union of genuinely different *object* shapes
@@ -171,7 +178,7 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 
 | Extension | Meaning |
 | --- | --- |
-| `x-widget` | Force a control: `textarea`, `radio`, `combobox`, `multiselect`, `tags`, `range`, `switch`, `file`, `static`, `hidden`, … |
+| `x-widget` | Force a control: `textarea`, `radio`, `combobox`, `multiselect`, `tags`, `range`, `switch`, `file`, `static`, `hidden`, `array`, … A document that names its control is taken at its word; one that does not gets the friendliest default for the shape it describes. |
 | `x-renderer` | A custom renderer key registered with `RegisterCustom`. |
 | `x-order`, `x-group`, `x-placeholder`, `x-autocomplete`, `x-inputMode`, `x-autofocus` | Field metadata. |
 | `x-columns`, `x-colSpan` | Grid layout. |
@@ -179,7 +186,7 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 | `x-updateOn`, `x-debounce` | When the value is written back. |
 | `x-step` | The control's granularity, as distinct from a `multipleOf` constraint. |
 | `x-accept`, `x-multiple`, `x-maxFileSize` | File upload constraints. |
-| `x-visibleWhen`, `x-disabledWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. |
+| `x-visibleWhen`, `x-disabledWhen`, `x-readOnlyWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. |
 | `x-revalidateOn` | Paths whose change revalidates this field — the other half of a cross-field rule. |
 | `x-clearOnHide` | Clear the value when the field is hidden. |
 | `x-attributes`, `x-inputAttributes` | Renderer hints and extra HTML attributes. |
@@ -187,9 +194,9 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 | `enumNames`, `x-enumGroups`, `x-enumDisabled` | Labels matching the `enum` values, the `<optgroup>` each belongs to, and the values that may not be chosen. |
 | `examples` | `<datalist>` suggestions. |
 
-Conditions, rules and renderer hints backed by code (`VisibleWhen(predicate)`, `Must`, `MustAsync`, a
-delegate stashed in `Attributes`) have no JSON form and are omitted from the export rather than
-approximated.
+Conditions, rules and renderer hints backed by code (`VisibleWhen(predicate)`, `Must`, `MustAsync`,
+`Computed`, `OnChange`, `Normalize`, a delegate stashed in `Attributes`) have no JSON form and are
+omitted from the export rather than approximated.
 
 ## Validation
 
@@ -218,7 +225,17 @@ Custom, async and cross-field rules:
     .MustAsync(async ctx => await users.IsAvailableAsync((string?)ctx.Value ?? ""), "That username is taken."))
 ```
 
-Async rules are skipped while the user types and run on blur and on submit.
+Async rules are skipped while the user types and run on blur and on submit — and on the pause of a
+debounced field, which is what debouncing is for:
+
+```csharp
+.Field(x => x.Username, f => f
+    .UpdateOnInput(debounceMilliseconds: 400)   // one write per pause, not one per character
+    .MustAsync(async ctx => await users.IsAvailableAsync((string?)ctx.Value ?? ""), "That username is taken."))
+```
+
+`state.IsValidatingField(path)` reports the lookup while it is in flight, so a spinner goes beside
+*that* box rather than the whole form declaring itself busy.
 
 ### Rules that read another field
 
@@ -253,6 +270,37 @@ Rules can also be scoped to a condition, the way FluentValidation's `.When(…)`
         .MinLength(3)))
 ```
 
+### Tidying a value instead of complaining about it
+
+A rule that rejects `" a@b.com "` for its surrounding spaces is technically correct and of no use to
+anyone: the user cannot see the difference, and fixing the message inside the rule leaves the untidy
+value in the model anyway. `Normalize` fixes the value:
+
+```csharp
+.Field(x => x.Email, f => f.AsEmail().Required().Trim())
+
+.Field(x => x.Reference, f => f
+    .Normalize(v => v is string s ? s.Trim().ToUpperInvariant() : v))
+```
+
+It runs when the user *leaves* the field, and once more over every field on submit — so a field
+nobody visited is tidied too. Never per keystroke, which would eat the space between two words the
+moment it was typed. `Trim()` turns a value that is nothing but whitespace into null, so a required
+field is not satisfied by `"   "`. React Hook Form spells this `setValueAs`.
+
+### Date and time windows
+
+`Range` takes dates and times as well as numbers. The bound is rendered as the control's own `min` /
+`max` — so the picker will not offer a date the form would then refuse — *and* enforced by the rule,
+so a value typed past the picker is reported rather than quietly accepted:
+
+```csharp
+.Field(x => x.Arrival,  f => f.Range(DateTime.Today, DateTime.Today.AddMonths(6)))
+.Field(x => x.CheckIn,  f => f.Range(new TimeOnly(14, 0), new TimeOnly(22, 0)))
+```
+
+`[Range(typeof(DateTime), "2024-01-01", "2024-12-31")]` on a model means the same thing.
+
 Two details worth knowing:
 
 - **`Required()` on a checkbox means "must be ticked"** — the same thing HTML's own `required`
@@ -280,6 +328,14 @@ var state = new BlazorFormState(definition, accessor)
     ValidationTrigger   = BlazorFormValidationTrigger.OnBlur,   // before the first submit
     RevalidationTrigger = BlazorFormValidationTrigger.OnChange  // after it
 };
+```
+
+Or let `BlazorFormView` build the state and configure it in place, which keeps the
+`Definition` + `Model` shorthand:
+
+```razor
+<BlazorFormView Definition="_definition" Model="_model"
+                ConfigureState="s => s.ValidationTrigger = BlazorFormValidationTrigger.OnBlur" />
 ```
 
 A field that already shows an error always revalidates eagerly, so the error clears as soon as it is fixed.
@@ -398,7 +454,7 @@ external validator.
 
 ## Conditional fields and wizards
 
-Show, disable or conditionally require fields based on other values:
+Show, disable, lock or conditionally require fields based on other values:
 
 ```csharp
 .Field(x => x.CompanyName, f => f
@@ -406,6 +462,19 @@ Show, disable or conditionally require fields based on other values:
     .RequiredWhen(nameof(Model.IsBusiness), BlazorFormConditionOperator.IsTrue)
     .ClearOnHide())
 ```
+
+`ReadOnlyWhen` is for an answer that is *settled* rather than one that does not apply — an invoice
+that has been sent, a field the approver owns:
+
+```csharp
+.Field(x => x.Reference, f => f
+    .ReadOnlyWhen(nameof(Model.Confirmed), BlazorFormConditionOperator.IsTrue))
+```
+
+Reach for it rather than `DisabledWhen` whenever the value still matters to the person reading the
+form. A disabled control leaves the tab order and is not announced at all, so "the invoice has been
+sent, here is its reference" becomes a value a keyboard or screen-reader user cannot get to;
+read-only keeps it reachable, readable and copyable.
 
 `ClearOnHide` empties the value as soon as the field disappears, so a branch the user abandoned
 never contributes data to the submitted model.
@@ -434,6 +503,10 @@ BlazorFormBuilder.For<Order>()
 
 `BlazorFormView` renders a stepper, Back/Next navigation, and validates each step before advancing.
 Hidden steps are skipped and the visible ones stay contiguously numbered.
+
+Pressing Enter in a text box on a step that is not the last one advances, exactly as the Next button
+does — the browser would otherwise submit the whole form and answer a user who is halfway through
+with a wall of errors about questions they have not been asked yet.
 
 Every step the user has already walked past is clickable — forwards as well as back, since each was
 validated on the way through — so coming back to fix one answer does not mean pressing Next through
@@ -681,12 +754,13 @@ key, rather than silently falling back to a text box.
 | `Model` | Optional typed model to bind to. When omitted, a dictionary store is used. |
 | `Data` | Optional `IDictionary<string, object?>` backing store (used when `Model` is null). |
 | `State` | Provide a pre-configured `BlazorFormState` (e.g. with FluentValidation wired up). |
+| `ConfigureState` | Runs against the state the view builds from `Definition`, before it renders — set the validation triggers, wire up a validator, subscribe to an event. Saves constructing and disposing a state by hand just to change one setting. |
 | `OnValidSubmit` | Raised with the state after a successful (valid) submit. |
 | `OnInvalidSubmit` | Raised after a submit that failed validation. |
 | `OnFieldChanged` | Raised with the path of a field whose value changed. |
 | `ReadOnly` | Renders every field read-only (review mode) and hides the buttons. |
 | `Disabled` | Disables every field and button — a save in flight, a locked record. Unlike `ReadOnly` the fields cannot be tabbed through or read out, so reach for it only when the form is genuinely inoperable. |
-| `ShowSubmitButton` / `SubmitText` | The built-in submit button (default `true` / `"Submit"`). |
+| `ShowSubmitButton` / `SubmitText` / `SubmittingText` | The built-in submit button (default `true` / `"Submit"`). While the form is validating or saving the button says so, rather than only going grey. |
 | `ShowResetButton` / `ResetText` | A button restoring the values the form started with. |
 | `ShowErrorSummary` | Lists every error above the form, each linking to its field. |
 | `FocusFirstError` | Moves focus to the first invalid field after a failed submit (default `true`; suppressed while `ShowErrorSummary` is on, since the summary takes focus itself). |
@@ -717,7 +791,10 @@ When you let the view build its own state from `Definition`, capture the compone
 | `IsFormDirty`, `DirtyFields`, `TouchedFields` | Change tracking. Dirtiness is a comparison against the values the form opened with, so a field typed into and put back is clean again. |
 | `ResetField(path)` | Puts one field — and anything nested beneath it — back to the value it started with. |
 | `IsValidating`, `IsSubmitting`, `IsSubmitted`, `SubmitCount`, `IsValid`, `HasValidated` | Submission state. `IsValid` reports what validation has *found*, so check `HasValidated` before treating it as a verdict — a form nobody has validated has no errors. |
-| `GetFieldState(path)` | Touched, dirty, invalid, the first error and every message for one field, in a single read. |
+| `IsSubmitSuccessful` | Whether the last submit passed validation *and* its handler returned without throwing — what a "Saved." banner binds to. |
+| `IsValidatingField(path)`, `ValidatingFields` | Whether an async rule is in flight for one field, so a remote uniqueness check can put a spinner beside its own box rather than declaring the whole form busy. |
+| `GetFieldState(path)` | Touched, dirty, invalid, validating, the first error and every message for one field, in a single read. |
+| `NormalizeField(field, path)` / `NormalizeAll()` | Run the schema's normalizers. The built-in controls call these for you on blur and on submit. |
 | `SubmitAsync` | Marks everything touched, validates, and dispatches — ignoring re-entrant calls. |
 | `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. `ValidateFieldAsync(path)` resolves the field from the schema for you. |
 | `ValidateDependentsAsync(path)` | Revalidates every field that declared `RevalidateOn(path)`. The built-in controls call it for you; this is the hook for a custom one. |

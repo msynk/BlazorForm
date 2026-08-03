@@ -96,6 +96,12 @@ public static class BlazorFormMessageKeys
     /// <summary>Label of the submit button.</summary>
     public const string Submit = "ui.submit";
 
+    /// <summary>
+    /// Label of the submit button while the submit is in flight. A button that only goes grey reads as
+    /// broken rather than busy, and says nothing at all to a screen reader.
+    /// </summary>
+    public const string Submitting = "ui.submitting";
+
     /// <summary>Label of the reset button.</summary>
     public const string Reset = "ui.reset";
 
@@ -200,6 +206,7 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.SummaryTitleOne => "There is a problem with this form:",
         BlazorFormMessageKeys.SummaryTitleMany => $"There are {Arg(args, 0)} problems with this form:",
         BlazorFormMessageKeys.Submit => "Submit",
+        BlazorFormMessageKeys.Submitting => "Submitting…",
         BlazorFormMessageKeys.Reset => "Reset",
         BlazorFormMessageKeys.Back => "Back",
         BlazorFormMessageKeys.Next => "Next",

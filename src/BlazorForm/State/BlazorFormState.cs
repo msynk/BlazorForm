@@ -17,6 +17,7 @@ public sealed class BlazorFormState : IDisposable
     private readonly Dictionary<string, IReadOnlyList<BlazorFormSelectOption>> _loadedOptions = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _optionsInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _fieldValidationCts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _validatingFields = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _optionsCts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _conversionErrors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Exception> _optionsErrors = new(StringComparer.OrdinalIgnoreCase);
@@ -25,6 +26,8 @@ public sealed class BlazorFormState : IDisposable
     private readonly bool _hasComputed;
     private readonly bool _hasChangeHandlers;
     private readonly bool _hasRevalidateOn;
+    private readonly bool _hasNormalizers;
+    private readonly bool _hasOptionDependencies;
 
     // Handlers write values, and those writes are changes too. Bounded so a pair that answer each other
     // settles rather than recursing, exactly as a cycle of computed formulas does.
@@ -48,6 +51,9 @@ public sealed class BlazorFormState : IDisposable
         _hasComputed = definition.AllFields().Any(f => f.Computed is not null);
         _hasChangeHandlers = definition.AllFields().Any(f => f.OnChanged is not null);
         _hasRevalidateOn = definition.AllFields().Any(f => f.RevalidateOn.Count > 0);
+        _hasNormalizers = definition.AllFields().Any(f => f.Normalize is not null);
+        _hasOptionDependencies = definition.AllFields()
+            .Any(f => f.OptionsProvider is not null && f.OptionsDependencies.Count > 0);
 
         ApplyDefaults();
         SeedRequiredArrayItems();
@@ -172,6 +178,18 @@ public sealed class BlazorFormState : IDisposable
 
     /// <summary>True once the form has been submitted at least once.</summary>
     public bool IsSubmitted => SubmitCount > 0;
+
+    /// <summary>
+    /// True when the last submit passed validation <em>and</em> the handler it dispatched to returned
+    /// without throwing — React Hook Form's <c>isSubmitSuccessful</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is what a "Saved." confirmation binds to. <see cref="IsValid"/> cannot do the job: it goes
+    /// back to true the moment the user corrects the last error, long before anything has been saved,
+    /// and it says nothing at all about whether the save then failed. Reset by the next submit attempt
+    /// and by <see cref="Reset()"/>.
+    /// </remarks>
+    public bool IsSubmitSuccessful { get; private set; }
 
     /// <summary>
     /// True when no error-severity message is currently recorded.
@@ -524,8 +542,14 @@ public sealed class BlazorFormState : IDisposable
     public bool IsDisabled(BlazorFormFieldDefinition field, string? path = null)
         => Disabled || (field.DisabledWhen is not null && field.DisabledWhen.Evaluate(ScopeFor(path)));
 
-    /// <summary>Whether a field is read-only, either in its own right or because the whole form is.</summary>
-    public bool IsReadOnly(BlazorFormFieldDefinition field) => ReadOnly || field.ReadOnly;
+    /// <summary>
+    /// Whether a field is read-only: in its own right, because a condition says so, or because the
+    /// whole form is. Pass <paramref name="path"/> so a condition written on an array item's template
+    /// is evaluated against that row, exactly as <see cref="IsVisible"/> and <see cref="IsDisabled"/> do.
+    /// </summary>
+    public bool IsReadOnly(BlazorFormFieldDefinition field, string? path = null)
+        => ReadOnly || field.ReadOnly
+           || (field.ReadOnlyWhen is not null && field.ReadOnlyWhen.Evaluate(ScopeFor(path)));
 
     /// <summary>Whether a field is required right now, taking <see cref="BlazorFormFieldDefinition.RequiredWhen"/> into account.</summary>
     public bool IsRequired(BlazorFormFieldDefinition field, string? path = null)
@@ -706,25 +730,58 @@ public sealed class BlazorFormState : IDisposable
 
     private void InvalidateDependentOptions(string changedPath)
     {
-        if (_loadedOptions.Count == 0) return;
+        if (!_hasOptionDependencies) return;
 
+        // Two passes: the walk only collects, so it never sees the data change underneath it, and a
+        // form where nothing depends on this path — which is almost every write — allocates nothing.
+        List<(BlazorFormFieldDefinition Field, string Path)>? targets = null;
         foreach (var (field, path) in EnumerateFieldPaths())
         {
-            if (field.OptionsProvider is null || !_loadedOptions.ContainsKey(path)) continue;
+            if (field.OptionsProvider is null) continue;
             // Matched the same way conditions and computed dependencies are: relative to the object that
             // owns the field, so a cascading select inside a repeater row can name its sibling
             // ("Country") and still reload, and by prefix, so naming a container covers its members.
             if (!DeclaresPath(field.OptionsDependencies, changedPath, BlazorFormPath.Parent(path))) continue;
 
+            (targets ??= []).Add((field, path));
+        }
+        if (targets is null) return;
+
+        List<string>? cleared = null;
+        foreach (var (_, path) in targets)
+        {
             CancelOptionsLoad(path);
             _loadedOptions.Remove(path);
             _optionsErrors.Remove(path);
-            // The previously selected option may no longer exist in the new list.
-            if (Data.GetValue(path) is not null)
-            {
-                Data.SetValue(path, null);
-                TrackDirty(path);
-            }
+            // The previously selected option may no longer exist in the new list. This is judged on the
+            // dependency, not on whether the choices happen to be cached: a value written before the
+            // control ever rendered — a prefill, a restored draft — was still chosen for the old
+            // dependency, and leaving it because no list had been fetched yet is how a city survives the
+            // country it belongs to.
+            if (Data.GetValue(path) is null) continue;
+
+            Data.SetValue(path, null);
+            TrackDirty(path);
+            // Whatever was being said about this field described the answer that has just been taken
+            // away, so it goes with it.
+            RemoveMessagesUnder(path);
+            (cleared ??= []).Add(path);
+        }
+
+        // …and the rest of the engine has to hear about it, exactly as it does when a condition empties
+        // a field. Without this a third level of a cascade never reloaded (country → region → city left
+        // the city holding a value from the country the user had just abandoned), a total that read the
+        // cleared field kept its old figure, a branch it was keeping open stayed open, and an autosave
+        // watching FieldChanged never saw the value go. Run after the loop because each of these
+        // re-enters this method; it terminates because a field is only cleared while it still holds
+        // something, and its cached options are dropped on the way past.
+        if (cleared is null) return;
+        foreach (var path in cleared)
+        {
+            InvalidateDependentOptions(path);
+            ClearHiddenValues(path);
+            RecomputeValues(path);
+            FieldChanged?.Invoke(path);
         }
     }
 
@@ -805,7 +862,7 @@ public sealed class BlazorFormState : IDisposable
             invalid = true;
             break;
         }
-        return new BlazorFormFieldState(IsTouched(path), IsDirty(path), invalid, messages);
+        return new BlazorFormFieldState(IsTouched(path), IsDirty(path), invalid, messages, IsValidatingField(path));
     }
 
     /// <summary>Validates the entire form and stores the results.</summary>
@@ -955,6 +1012,12 @@ public sealed class BlazorFormState : IDisposable
         var cts = new CancellationTokenSource();
         _fieldValidationCts[path] = cts;
 
+        // Only when there is genuinely something to wait for. Every rule this field has is synchronous
+        // on most fields, so flagging those would flicker a spinner on and off once per keystroke to
+        // report work that never left the thread.
+        var awaited = includeAsync && HasAsyncRules(field);
+        if (awaited && _validatingFields.Add(path)) NotifyChanged();
+
         try
         {
             var messages = await _validator.ValidateFieldAsync(field, path, Data, Services, includeAsync, cts.Token);
@@ -975,9 +1038,36 @@ public sealed class BlazorFormState : IDisposable
             {
                 _fieldValidationCts.Remove(path);
                 cts.Dispose();
+                // Cleared only by the run that owns the field: a superseded run finishing late must not
+                // announce that the newer one, still in flight, has finished too.
+                if (awaited && _validatingFields.Remove(path)) NotifyChanged();
             }
         }
     }
+
+    /// <summary>Whether a field has any rule that actually goes away and comes back.</summary>
+    private static bool HasAsyncRules(BlazorFormFieldDefinition field)
+    {
+        for (var i = 0; i < field.Validators.Count; i++)
+            if (field.Validators[i].IsAsync) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether an asynchronous rule is currently running for <paramref name="path"/> — what a control
+    /// showing "checking that username…" binds to. React Hook Form spells the set of these
+    /// <c>validatingFields</c>; TanStack Form spells it <c>field.state.meta.isValidating</c>.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="IsValidating"/>, which is about the form: a remote uniqueness check on
+    /// one box should put a spinner beside that box, not declare the whole form busy and grey out its
+    /// submit button. Only fields that actually have an async rule are ever reported, so a form of
+    /// ordinary synchronous rules never flickers.
+    /// </remarks>
+    public bool IsValidatingField(string path) => _validatingFields.Contains(path);
+
+    /// <summary>Every field path with an asynchronous rule currently in flight.</summary>
+    public IReadOnlyCollection<string> ValidatingFields => _validatingFields;
 
     /// <summary>
     /// Revalidates every field that declared <paramref name="changedPath"/> in its
@@ -1020,6 +1110,45 @@ public sealed class BlazorFormState : IDisposable
         if (dependents is null) return;
         foreach (var (field, path) in dependents)
             await ValidateFieldAsync(field, path, includeAsync);
+    }
+
+    /// <summary>
+    /// Runs the field's <see cref="BlazorFormFieldDefinition.Normalize"/> over the value at
+    /// <paramref name="path"/>, writing the result back when it differs. Returns true if anything
+    /// changed.
+    /// </summary>
+    /// <remarks>
+    /// The write goes through the ordinary path, so tidying a value runs the same sweeps typing one
+    /// does — a total that reads it recomputes, a condition that watches it re-evaluates, an autosave
+    /// hears about it. It is written <em>quietly</em>: normalising is the form tidying up after the
+    /// user, not the user visiting a field.
+    /// </remarks>
+    public bool NormalizeField(BlazorFormFieldDefinition field, string path)
+    {
+        if (field.Normalize is not { } normalize) return false;
+
+        var current = Data.GetValue(path);
+        var tidied = normalize(current);
+        if (Equals(current, tidied)) return false;
+
+        SetValueQuietly(path, tidied);
+        return true;
+    }
+
+    /// <summary>
+    /// Runs every declared normalizer across the form — including one per row of a repeater. Called
+    /// before a submit validates, so a field the user never visited is still tidied.
+    /// </summary>
+    public bool NormalizeAll()
+    {
+        if (!_hasNormalizers) return false;
+
+        var changed = false;
+        // Materialised: normalising writes values, and a write runs sweeps that mutate the live arrays
+        // this walk is reading.
+        foreach (var (field, path) in EnumerateFieldPaths().ToList())
+            changed |= NormalizeField(field, path);
+        return changed;
     }
 
     /// <summary>
@@ -1087,7 +1216,13 @@ public sealed class BlazorFormState : IDisposable
     /// </summary>
     public void SetServerErrors(IEnumerable<BlazorFormValidationMessage> messages)
     {
+        ArgumentNullException.ThrowIfNull(messages);
+
         ReplaceAllMessages(messages.ToList());
+        // A value the model could never accept is not something the server has an opinion about — it
+        // never reached the server — so replacing the message set must not take its complaint with it,
+        // leaving the box showing text the model does not hold and nothing at all to say why.
+        ReapplyConversionErrors();
         foreach (var m in _messages.Keys) _touched.Add(m);
         NotifyChanged();
     }
@@ -1119,7 +1254,12 @@ public sealed class BlazorFormState : IDisposable
         if (IsSubmitting) return false;
 
         IsSubmitting = true;
+        IsSubmitSuccessful = false;
         RegisterSubmitAttempt();
+        // Tidy first, judge second. A field the user never visited never blurred, so this is the only
+        // chance its normalizer gets — and a value that reaches the handler should be the one that
+        // would have been stored.
+        NormalizeAll();
         MarkAllTouched();
         NotifyChanged();
         try
@@ -1128,6 +1268,9 @@ public sealed class BlazorFormState : IDisposable
             if (valid)
             {
                 if (onValid is not null) await onValid(this);
+                // Set only once the handler has returned: a save that threw did not succeed, and a
+                // "Saved" banner bound to this must not appear over the top of the failure.
+                IsSubmitSuccessful = true;
             }
             else if (onInvalid is not null)
             {
@@ -1237,6 +1380,7 @@ public sealed class BlazorFormState : IDisposable
 
         SubmitCount = 0;
         HasValidated = false;
+        IsSubmitSuccessful = false;
         CurrentStepIndex = 0;
         FurthestStepIndex = 0;
         ClampStep();
@@ -1534,21 +1678,33 @@ public sealed class BlazorFormState : IDisposable
         TrackDirty(arrayPath);
         // The row was created a line ago, so every value in it is a placeholder the default may replace.
         ApplyItemDefaults(arrayField, BlazorFormPath.Combine(arrayPath, target), overwrite: true);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         RemoveMessagesFor(arrayPath); // the collection-size rule may now pass
         if (notify) NotifyArrayChanged(arrayPath);
         return target;
     }
 
     /// <summary>
-    /// Announces that an array's contents changed. A repeater operation changes the value of the field
-    /// the list binds to as surely as typing does, so anything watching <see cref="FieldChanged"/> — an
-    /// autosave, a preview, a page-level dirty prompt — has to hear about it. Only the array's own path
-    /// is raised: the rows beneath it moved, but which row is "the field that changed" is not a
-    /// question with an answer.
+    /// Settles the form after an array's contents changed, and announces it. A repeater operation
+    /// changes the value of the field the list binds to as surely as typing does, so it runs the same
+    /// sweeps a typed-in value runs and anything watching <see cref="FieldChanged"/> — an autosave, a
+    /// preview, a page-level dirty prompt — hears about it.
     /// </summary>
+    /// <remarks>
+    /// Only the array's own path is raised: the rows beneath it moved, but which row is "the field that
+    /// changed" is not a question with an answer. The sweeps matter as much as the event —
+    /// <c>VisibleWhen("Lines", IsNotEmpty)</c> with <c>ClearOnHide</c> never fired when the last line
+    /// was deleted, and a select loading its choices from the list never reloaded, because emptying a
+    /// repeater was the one kind of change that told only half the engine about itself.
+    /// </remarks>
     private void NotifyArrayChanged(string arrayPath)
     {
+        ClearHiddenValues(arrayPath);
+        RecomputeValues(arrayPath);
+        InvalidateDependentOptions(arrayPath);
+        // A row appearing or disappearing can satisfy — or break — the condition on a wizard step.
+        ClampStep();
         FieldChanged?.Invoke(arrayPath);
         NotifyChanged();
     }
@@ -1583,7 +1739,8 @@ public sealed class BlazorFormState : IDisposable
             Data.SetValue(targetPath + relative, value);
 
         TrackDirty(arrayPath);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         NotifyArrayChanged(arrayPath);
         return target;
     }
@@ -1660,7 +1817,8 @@ public sealed class BlazorFormState : IDisposable
 
         RemoveMessagesFor(arrayPath);
         TrackDirty(arrayPath);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         NotifyArrayChanged(arrayPath);
     }
 
@@ -1678,7 +1836,8 @@ public sealed class BlazorFormState : IDisposable
         // user just moved keeps the error it already showed instead of appearing to be fixed.
         RemapArrayIndices(arrayPath, index => MapMovedIndex(index, from, to));
         TrackDirty(arrayPath);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         NotifyArrayChanged(arrayPath);
     }
 
@@ -1697,7 +1856,8 @@ public sealed class BlazorFormState : IDisposable
 
         RemapArrayIndices(arrayPath, index => index == first ? second : index == second ? first : index);
         TrackDirty(arrayPath);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         NotifyArrayChanged(arrayPath);
     }
 
@@ -1726,7 +1886,8 @@ public sealed class BlazorFormState : IDisposable
         // The collection-size rule is judged against the field itself, so its own message goes too.
         RemoveMessagesFor(arrayPath);
         TrackDirty(arrayPath);
-        RecomputeValues(arrayPath);
+        // Recompute, the ClearOnHide sweep and the cascading-options sweep all run once, together, in
+        // NotifyArrayChanged below.
         NotifyArrayChanged(arrayPath);
     }
 
@@ -1828,10 +1989,24 @@ public sealed class BlazorFormState : IDisposable
         foreach (var m in messages) AddMessage(m);
     }
 
+    /// <summary>
+    /// Records a message against its field.
+    /// </summary>
+    /// <remarks>
+    /// The list is replaced rather than appended to. A field's rendered output is diffed against a
+    /// signature that treats its message list's <em>identity</em> as its content — the cheapest correct
+    /// test, since a validation pass always rebuilds the list — so appending in place left the identity
+    /// unchanged and the field decided it had nothing new to draw. A second
+    /// <see cref="SetServerError"/> on a field that was already reporting something was recorded in the
+    /// state and never appeared on the page.
+    /// </remarks>
     private void AddMessage(BlazorFormValidationMessage message)
     {
         if (!_messages.TryGetValue(message.FieldPath, out var list))
-            _messages[message.FieldPath] = list = new List<BlazorFormValidationMessage>();
+        {
+            _messages[message.FieldPath] = [message];
+            return;
+        }
 
         if (SingleErrorPerField && message.Severity == BlazorFormValidationSeverity.Error)
         {
@@ -1839,7 +2014,28 @@ public sealed class BlazorFormState : IDisposable
                 if (list[i].Severity == BlazorFormValidationSeverity.Error) return;
         }
 
-        list.Add(message);
+        var next = new List<BlazorFormValidationMessage>(list.Count + 1);
+        next.AddRange(list);
+        next.Add(message);
+        _messages[message.FieldPath] = next;
+    }
+
+    /// <summary>
+    /// Moves a batch of messages onto <paramref name="key"/>, replacing whatever list is there rather
+    /// than appending to it — see <see cref="AddMessage"/> for why the identity has to change.
+    /// </summary>
+    private void AppendMessages(string key, List<BlazorFormValidationMessage> messages)
+    {
+        if (!_messages.TryGetValue(key, out var existing))
+        {
+            _messages[key] = messages;
+            return;
+        }
+
+        var next = new List<BlazorFormValidationMessage>(existing.Count + messages.Count);
+        next.AddRange(existing);
+        next.AddRange(messages);
+        _messages[key] = next;
     }
 
     private void RemoveMessagesFor(string path) => _messages.Remove(path);
@@ -1869,8 +2065,7 @@ public sealed class BlazorFormState : IDisposable
             if (!_messages.Remove(key, out var list)) continue;
 
             var rebased = list.Select(m => m with { FieldPath = BlazorFormPath.Reindex(m.FieldPath, arrayPath, index.Value + delta) ?? m.FieldPath }).ToList();
-            if (_messages.TryGetValue(newKey, out var existing)) existing.AddRange(rebased);
-            else _messages[newKey] = rebased;
+            AppendMessages(newKey, rebased);
         }
     }
 
@@ -1914,10 +2109,7 @@ public sealed class BlazorFormState : IDisposable
         }
 
         foreach (var (key, messages) in lifted)
-        {
-            if (_messages.TryGetValue(key, out var existing)) existing.AddRange(messages);
-            else _messages[key] = messages;
-        }
+            AppendMessages(key, messages);
     }
 
     private static void RemapPathSet(HashSet<string> set, string arrayPath, Func<int, int> map)
@@ -2137,6 +2329,7 @@ public sealed class BlazorFormState : IDisposable
         }
         _fieldValidationCts.Clear();
         _optionsCts.Clear();
+        _validatingFields.Clear();
         _focusTargets.Clear();
 
         StateChanged = null;

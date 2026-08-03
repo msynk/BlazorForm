@@ -11,7 +11,9 @@
         Choose <em>when</em> a field revalidates, independently for before and after the first submit —
         the same <code>mode</code>/<code>reValidateMode</code> split React Hook Form popularised. The
         summary below lists every error in schema order and links to the control that needs fixing.
-        The username field runs an <em>async</em> rule on blur (try <code>ada</code> or <code>admin</code>).
+        The username field is <em>debounced</em>, so its async availability check runs once you pause
+        rather than once per character — try <code>ada</code> or <code>admin</code> and watch the
+        indicator below.
     </p>
 </div>
 
@@ -51,8 +53,10 @@
 <p class="demo-status">
     dirty: <strong>@_state.IsFormDirty</strong> ·
     submitted: <strong>@_state.SubmitCount</strong> time(s) ·
-    validating: <strong>@_state.IsValidating</strong> ·
-    errors: <strong>@_state.AllMessages.Count()</strong>
+    saved: <strong>@_state.IsSubmitSuccessful</strong> ·
+    errors: <strong>@_state.AllMessages.Count()</strong> ·
+    @* Per field, not per form: a lookup on one box should not declare the whole form busy. *@
+    checking username: <strong>@(_state.IsValidatingField("Username") ? "yes — remote lookup in flight" : "no")</strong>
 </p>
 
 @if (_submitted)
@@ -99,7 +103,11 @@
             .Field(x => x.Username, f => f
                 .Required()
                 .Autocomplete("username")
-                // Async rules are skipped while typing and run on blur and on submit.
+                .Trim()                                  // fix the value; do not complain about spaces
+                // Debouncing writes once per pause instead of once per character — and the async rule
+                // runs with that write, which is the whole reason to debounce a field that calls out
+                // to a service. An undebounced field's async rules still wait for blur.
+                .UpdateOnInput(debounceMilliseconds: 400)
                 .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", default),
                            "That username is taken.")
                 .Help("Try 'ada' or 'admin' to see the async rule fire."))
@@ -135,6 +143,9 @@
             .Field(x => x.Username, f => f
                 .Required()
                 .Autocomplete("username")
+                .Trim()
+                .UpdateOnInput(debounceMilliseconds: 400)
+                // A spinner beside this one box, not a form that declares itself busy: state.IsValidatingField("Username")
                 .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", default),
                            "That username is taken.")
                 .Help("Try 'ada' or 'admin' to see the async rule fire."))

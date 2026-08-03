@@ -261,6 +261,37 @@ public sealed class BlazorFormFieldBuilder
     }
 
     /// <summary>
+    /// Tidies the value once the user has finished entering it — on blur, and once more for every
+    /// field on submit. React Hook Form spells this <c>setValueAs</c>.
+    /// </summary>
+    /// <remarks>
+    /// It is the answer to a rule that rejects <c>" a@b.com "</c> for its spaces, which is technically
+    /// correct and of no use to anyone: fix the value, not the complaint. Not run per keystroke, which
+    /// would eat the space between two words the moment it was typed.
+    /// </remarks>
+    public BlazorFormFieldBuilder Normalize(BlazorFormValueNormalizer normalize)
+    {
+        _field.Normalize = normalize;
+        return this;
+    }
+
+    /// <summary>
+    /// Trims surrounding whitespace from a text value when the user leaves the field. Pasted values
+    /// carry it in constantly, and it is invisible in the box and fatal in a lookup key.
+    /// </summary>
+    /// <param name="emptyBecomesNull">
+    /// Whether a value that is nothing but whitespace becomes null rather than <c>""</c>. True by
+    /// default: "  " is not an answer, and storing it makes a required field pass on a blank one.
+    /// </param>
+    public BlazorFormFieldBuilder Trim(bool emptyBecomesNull = true)
+        => Normalize(value =>
+        {
+            if (value is not string s) return value;
+            var trimmed = s.Trim();
+            return trimmed.Length == 0 && emptyBecomesNull ? null : trimmed;
+        });
+
+    /// <summary>
     /// Maps a sequence of items to options, for the common "load a list and project it" case.
     /// </summary>
     /// <remarks>
@@ -327,6 +358,29 @@ public sealed class BlazorFormFieldBuilder
         _field.AddValidator(new BlazorFormRangeRule(min, max, message));
         return this;
     }
+
+    /// <summary>
+    /// Restricts a date field to a window — "not before today", "no later than the end of the year".
+    /// </summary>
+    /// <remarks>
+    /// The bounds are stored the way the rest of the library stores date bounds (as OLE automation
+    /// numbers), so they are enforced by the same rule and rendered as the input's own <c>min</c> and
+    /// <c>max</c> — which is what stops the browser's picker from offering a date the form will then
+    /// refuse. This is the readable form of what <c>[Range(typeof(DateTime), …)]</c> expresses on a model.
+    /// </remarks>
+    public BlazorFormFieldBuilder Range(DateTime? min, DateTime? max, string? message = null)
+        => Range(min?.ToOADate(), max?.ToOADate(), message);
+
+    /// <inheritdoc cref="Range(DateTime?, DateTime?, string?)" />
+    public BlazorFormFieldBuilder Range(DateOnly? min, DateOnly? max, string? message = null)
+        => Range(min?.ToDateTime(TimeOnly.MinValue), max?.ToDateTime(TimeOnly.MinValue), message);
+
+    /// <summary>
+    /// Restricts a time field to a window — "between 09:00 and 17:00". A time of day is stored as the
+    /// fraction of a day it stands for, which is the same scale the date bounds use.
+    /// </summary>
+    public BlazorFormFieldBuilder Range(TimeOnly? min, TimeOnly? max, string? message = null)
+        => Range(min?.ToTimeSpan().TotalDays, max?.ToTimeSpan().TotalDays, message);
 
     public BlazorFormFieldBuilder Step(double step) { _field.NumericStep = step; return this; }
 
@@ -515,6 +569,27 @@ public sealed class BlazorFormFieldBuilder
 
     public BlazorFormFieldBuilder DisabledWhen(Func<IBlazorFormDataReader, bool> predicate, params string[] dependencies)
         => DisabledWhen(new BlazorFormPredicateCondition(predicate, dependencies));
+
+    /// <summary>
+    /// Locks the field while <paramref name="condition"/> holds — an answer that is settled rather than
+    /// one that does not apply.
+    /// </summary>
+    /// <remarks>
+    /// Reach for this rather than <see cref="DisabledWhen(IBlazorFormCondition)"/> whenever the value
+    /// still matters to the person reading the form. A disabled control leaves the tab order and is not
+    /// announced at all, so "the invoice has been sent, the total is final" turns into a number a
+    /// keyboard or screen-reader user cannot get to; read-only keeps it reachable, readable and
+    /// copyable, which is what "you may look but not change" means.
+    /// </remarks>
+    public BlazorFormFieldBuilder ReadOnlyWhen(IBlazorFormCondition condition) { _field.ReadOnlyWhen = condition; return this; }
+
+    /// <inheritdoc cref="ReadOnlyWhen(IBlazorFormCondition)" />
+    public BlazorFormFieldBuilder ReadOnlyWhen(string field, BlazorFormConditionOperator op, object? value = null)
+        => ReadOnlyWhen(new BlazorFormFieldCondition(field, op, value));
+
+    /// <inheritdoc cref="ReadOnlyWhen(IBlazorFormCondition)" />
+    public BlazorFormFieldBuilder ReadOnlyWhen(Func<IBlazorFormDataReader, bool> predicate, params string[] dependencies)
+        => ReadOnlyWhen(new BlazorFormPredicateCondition(predicate, dependencies));
 
     /// <summary>
     /// Clears the value as soon as the field becomes hidden, so an abandoned branch of the form does

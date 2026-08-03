@@ -10,7 +10,7 @@
    Without that, a stray `class` would erase `ff-form` and a stray `onsubmit` would unhook validation. *@
 <form @attributes="AdditionalAttributes"
       class="ff-form @(Class)" novalidate aria-busy="@(Working ? "true" : null)"
-      @onsubmit="HandleSubmit" @onsubmit:preventDefault="true">
+      @onsubmit="OnFormSubmitted" @onsubmit:preventDefault="true">
     @* role="heading" rather than a fixed <h2>, for the same reason the Static field carries one: the
        form is rendered inside a page whose outline the library cannot know, and a form dropped under
        an <h3> would otherwise skip a level. Set TitleLevel to place it. *@
@@ -167,6 +167,20 @@
     /// <summary>Provide a pre-configured state (e.g. with FluentValidation wired up).</summary>
     [Parameter] public BlazorFormState? State { get; set; }
 
+    /// <summary>
+    /// Runs against the state this view builds from <see cref="Definition"/>, before it is rendered —
+    /// the place to set <see cref="BlazorFormState.ValidationTrigger"/>, call
+    /// <c>UseFluentValidation()</c> or subscribe to <see cref="BlazorFormState.OptionsLoadFailed"/>.
+    /// </summary>
+    /// <remarks>
+    /// Wanting one line of configuration otherwise meant giving up the <see cref="Definition"/> +
+    /// <see cref="Model"/> shorthand entirely and constructing, holding and disposing a
+    /// <see cref="BlazorFormState"/> by hand — which is a lot of ceremony to say "validate on blur".
+    /// Ignored when <see cref="State"/> is supplied, because that state is already the caller's to
+    /// configure. Called once per state, not once per render.
+    /// </remarks>
+    [Parameter] public Action<BlazorFormState>? ConfigureState { get; set; }
+
     /// <summary>Raised with the state after a successful (valid) submit.</summary>
     [Parameter] public EventCallback<BlazorFormState> OnValidSubmit { get; set; }
 
@@ -207,6 +221,12 @@
     /// to every form it renders.
     /// </summary>
     [Parameter] public string? SubmitText { get; set; }
+
+    /// <summary>
+    /// What the submit button says while validation or the submit handler is running. Leave it unset
+    /// and the text comes from the registered <see cref="IBlazorFormMessageProvider"/>.
+    /// </summary>
+    [Parameter] public string? SubmittingText { get; set; }
 
     /// <summary>Renders a button that restores the form to the values it started with.</summary>
     [Parameter] public bool ShowResetButton { get; set; }
@@ -357,6 +377,9 @@
         _builtFrom = Definition;
         _builtModel = Model;
         _builtData = Data;
+        // Before Attach, so a handler the callback subscribes to cannot fire a re-render into a view
+        // that is not yet bound to the state raising it.
+        ConfigureState?.Invoke(_owned);
         Attach(_owned);
         ApplyReadOnly();
     }
@@ -415,7 +438,14 @@
     private string StepAnnouncement
         => FormState.Text(BlazorFormMessageKeys.StepOf, FormState.CurrentStepNumber, FormState.VisibleSteps.Count);
 
-    private string SubmitLabel => SubmitText ?? FormState.Text(BlazorFormMessageKeys.Submit);
+    /// <summary>
+    /// What the submit button says. While the form is working it says so, rather than only going grey
+    /// — a disabled button with an unchanged label reads as broken rather than busy, and tells a
+    /// screen-reader user nothing at all about why pressing it did not appear to do anything.
+    /// </summary>
+    private string SubmitLabel => Working
+        ? SubmittingText ?? FormState.Text(BlazorFormMessageKeys.Submitting)
+        : SubmitText ?? FormState.Text(BlazorFormMessageKeys.Submit);
     private string ResetLabel => ResetText ?? FormState.Text(BlazorFormMessageKeys.Reset);
     private string BackLabel => BackText ?? FormState.Text(BlazorFormMessageKeys.Back);
     private string NextLabel => NextText ?? FormState.Text(BlazorFormMessageKeys.Next);
@@ -455,6 +485,30 @@
     /// does not mean reimplementing the pipeline behind it.
     /// </summary>
     public Task<bool> SubmitAsync() => HandleSubmit();
+
+    /// <summary>
+    /// What the <c>&lt;form&gt;</c>'s own submit event does — which is not always "submit the form".
+    /// </summary>
+    /// <remarks>
+    /// Pressing Enter in a text box submits the form it belongs to; the browser does this whether or
+    /// not a submit button is on the page. On a wizard step that is not the last one, the user pressing
+    /// Enter meant "next" — they are halfway through — and letting it finish the form instead ran a
+    /// validation pass over steps they had not reached and answered with a wall of errors about
+    /// questions they had not been asked yet. Enter advances, exactly as the Next button does; the
+    /// public <see cref="SubmitAsync"/> still submits, because a caller asking for that has said so.
+    /// </remarks>
+    private async Task OnFormSubmitted()
+    {
+        if (FormState.Definition.IsWizard && !FormState.IsLastStep)
+        {
+            // A read-only wizard has no Next of its own to press, but paging through it is still
+            // reading rather than editing, so Enter moves on rather than doing nothing at all.
+            await Next();
+            return;
+        }
+
+        await HandleSubmit();
+    }
 
     private async Task<bool> HandleSubmit()
     {

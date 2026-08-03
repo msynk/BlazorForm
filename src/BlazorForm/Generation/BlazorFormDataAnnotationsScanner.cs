@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using System.Globalization;
 using System.Reflection;
 
 namespace BlazorForm;
@@ -194,12 +193,11 @@ public static class BlazorFormDataAnnotationsScanner
     private static double? TryToDouble(object? value)
     {
         if (value is null) return null;
-        // [Range(typeof(DateTime), "2020-01-01", "2030-01-01")] carries strings; dates are stored as
-        // OLE automation numbers so the same double-based rule and input attributes can handle them.
-        if (value is DateTime dt) return dt.ToOADate();
+        // [Range(typeof(DateTime), "2020-01-01", "2030-01-01")] carries strings; dates and times are
+        // stored as OLE automation numbers so the same double-based rule and input attributes can
+        // handle them. The conversion is shared with the rule that does the comparing, so a bound and
+        // the value it judges can never be read on two different scales.
         if (BlazorFormNumber.TryToDouble(value, out var d)) return d;
-        return DateTime.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
-            ? parsed.ToOADate()
-            : null;
+        return BlazorFormNumber.TryToOADate(value, out var date) ? date : null;
     }
 }

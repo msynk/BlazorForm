@@ -28,6 +28,28 @@ public class AccountSignup
     public bool AcceptTerms { get; set; }
 }
 
+/// <summary>
+/// Model for the "settled answers" demo: a booking that locks itself once it has been confirmed, and
+/// whose values are tidied up on the way out.
+/// </summary>
+public class BookingRequest
+{
+    [Display(Name = "Booking reference")]
+    public string? Reference { get; set; }
+
+    [Required, Display(Name = "Contact email")]
+    public string ContactEmail { get; set; } = "";
+
+    [Display(Name = "Arrival")]
+    public DateOnly? Arrival { get; set; }
+
+    [Display(Name = "Check-in time")]
+    public TimeOnly? CheckIn { get; set; }
+
+    [Display(Name = "This booking is confirmed")]
+    public bool Confirmed { get; set; }
+}
+
 /// <summary>Model for the array/repeater demo: an invoice with line items.</summary>
 public class Invoice
 {
@@ -113,6 +135,13 @@ public class Profile
     [Required, EmailAddress] public string Email { get; set; } = "";
     [Phone] public string? Phone { get; set; }
     [Display(Name = "Available on")] public Weekdays Availability { get; set; }
+
+    /// <summary>
+    /// A plain collection of enum members — no <c>[Flags]</c> — and still a set of tick boxes rather
+    /// than a repeater of dropdowns, because the answers are a closed set either way.
+    /// </summary>
+    [Display(Name = "Preferred contact")] public List<ContactMethod> ContactMethods { get; set; } = [];
+
     public PostalAddress Address { get; set; } = new();
     public string? Bio { get; set; }
 }

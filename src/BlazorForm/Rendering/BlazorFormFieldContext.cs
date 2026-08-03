@@ -38,7 +38,7 @@ public sealed class BlazorFormFieldContext
     public bool IsDisabled => State.IsDisabled(Field, Path);
 
     /// <summary>Whether the field is read-only.</summary>
-    public bool IsReadOnly => State.IsReadOnly(Field);
+    public bool IsReadOnly => State.IsReadOnly(Field, Path);
 
     /// <summary>Whether the field is required right now (including <see cref="BlazorFormFieldDefinition.RequiredWhen"/>).</summary>
     public bool IsRequired => State.IsRequired(Field, Path);
@@ -54,6 +54,12 @@ public sealed class BlazorFormFieldContext
 
     /// <summary>True while an asynchronous options provider is loading this field's choices.</summary>
     public bool IsLoadingOptions => State.IsLoadingOptions(Path);
+
+    /// <summary>
+    /// True while an asynchronous rule is checking this field — the "checking that username…" state a
+    /// remote lookup deserves a spinner for. False for a field whose rules are all synchronous.
+    /// </summary>
+    public bool IsValidating => State.IsValidatingField(Path);
 
     /// <summary>True when this field's options provider failed; the choices are empty for a reason.</summary>
     public bool OptionsFailed => State.OptionsError(Path) is not null;
@@ -135,13 +141,19 @@ public sealed class BlazorFormFieldContext
     }
 
     /// <summary>Writes a parsed value from raw input text and revalidates according to the form's trigger.</summary>
-    public async Task SetFromStringAsync(string? raw)
+    /// <param name="raw">The text the control produced.</param>
+    /// <param name="includeAsync">
+    /// Whether asynchronous rules run too. False on an ordinary keystroke, where a remote lookup per
+    /// character is exactly what nobody wants; true once a debounced field's pause has elapsed, which
+    /// is the moment a uniqueness check becomes affordable and the whole reason to debounce a field.
+    /// </param>
+    public async Task SetFromStringAsync(string? raw, bool includeAsync = false)
     {
         var parsed = BlazorFormValueConverter.FromInputString(raw, Field.ValueType, Field.Type);
         State.SetValue(Path, parsed);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnChange))
-            await State.ValidateFieldAsync(Field, Path, includeAsync: false);
-        await State.ValidateDependentsAsync(Path);
+            await State.ValidateFieldAsync(Field, Path, includeAsync);
+        await State.ValidateDependentsAsync(Path, includeAsync);
     }
 
     /// <summary>Writes a value directly and revalidates according to the form's trigger.</summary>
@@ -159,6 +171,10 @@ public sealed class BlazorFormFieldContext
     /// </summary>
     public async Task BlurAsync()
     {
+        // Before the field is judged, not after: a rule that rejects " a@b.com " for the space is
+        // technically right and useless, and trimming inside the rule would fix the message while
+        // leaving the untidy value in the model.
+        State.NormalizeField(Field, Path);
         State.MarkTouched(Path);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnBlur))
             await State.ValidateFieldAsync(Field, Path, includeAsync: true);

@@ -124,7 +124,7 @@
     private string Announcement => Count == 0 ? "" : State.Text(BlazorFormMessageKeys.ArrayCount, Count, ItemNoun);
 
     /// <summary>Read-only or conditionally-disabled arrays cannot be edited, added to or reordered.</summary>
-    private bool Locked => State.IsDisabled(Field, Path) || State.IsReadOnly(Field);
+    private bool Locked => State.IsDisabled(Field, Path) || State.IsReadOnly(Field, Path);
 
     private bool CanAdd => !Locked && State.CanAddArrayItem(Field, Path);
 

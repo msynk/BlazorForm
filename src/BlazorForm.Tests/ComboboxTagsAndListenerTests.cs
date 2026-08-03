@@ -28,10 +28,22 @@ public class ComboboxRenderingTests : ComponentTestBase
         var cut = RenderForm(Schema());
         var input = cut.Find("input#ff_country");
 
-        Assert.Equal("combobox", input.GetAttribute("role"));
         Assert.Equal("ff_country_list", input.GetAttribute("list"));
         Assert.Equal("list", input.GetAttribute("aria-autocomplete"));
         Assert.Equal(3, cut.FindAll("#ff_country_list option").Count);
+    }
+
+    [Fact]
+    public void It_leaves_the_combobox_role_to_the_browser_rather_than_lying_about_the_popup()
+    {
+        // An <input list> is already a combobox in the accessibility tree. Declaring the role by hand
+        // takes on aria-expanded's contract — and the popup's open/closed state is the browser's alone,
+        // so the only value that could be written is a permanent "false" told to a screen-reader user
+        // at the exact moment the list is open.
+        var input = RenderForm(Schema()).Find("input#ff_country");
+
+        Assert.Null(input.GetAttribute("role"));
+        Assert.Null(input.GetAttribute("aria-expanded"));
     }
 
     [Fact]

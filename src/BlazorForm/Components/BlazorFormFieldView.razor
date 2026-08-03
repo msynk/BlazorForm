@@ -165,14 +165,15 @@
     private RenderSignature Capture() => new(
         State.IsVisible(Field, Path),
         State.IsDisabled(Field, Path),
-        State.IsReadOnly(Field),
+        State.IsReadOnly(Field, Path),
         State.IsRequired(Field, Path),
         Context.ShowMessages,
         Context.Value,
         State.MessagesFor(Path),
         State.IsLoadingOptions(Path),
         Context.OptionsFailed,
-        Context.Options.Count);
+        Context.Options.Count,
+        Context.IsValidating);
 
     /// <summary>
     /// Everything the rendered output of one field depends on. Messages are compared by reference:
@@ -188,7 +189,8 @@
         IReadOnlyList<BlazorFormValidationMessage> Messages,
         bool LoadingOptions,
         bool OptionsFailed,
-        int OptionCount)
+        int OptionCount,
+        bool Validating)
     {
         public bool Equals(RenderSignature other)
             => Visible == other.Visible
@@ -199,6 +201,7 @@
                && LoadingOptions == other.LoadingOptions
                && OptionsFailed == other.OptionsFailed
                && OptionCount == other.OptionCount
+               && Validating == other.Validating
                && ReferenceEquals(Messages, other.Messages)
                && ValuesMatch(Value, other.Value);
 

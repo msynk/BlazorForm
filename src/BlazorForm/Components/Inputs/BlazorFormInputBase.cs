@@ -176,7 +176,11 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
         {
             await Task.Delay(delay, cts.Token);
             _hasPendingRaw = false;
-            await Context.SetFromStringAsync(raw);
+            // Async rules run here and only here on the typing path. A pause is what a debounce exists
+            // to detect, and it is the moment a remote uniqueness check stops being one request per
+            // character and becomes one request per thing the user actually typed — which is the whole
+            // reason the field asked to be debounced. An undebounced field still waits for blur.
+            await Context.SetFromStringAsync(raw, includeAsync: true);
         }
         catch (OperationCanceledException)
         {

@@ -110,8 +110,9 @@ public sealed class BlazorFormDefinition
     /// Every container is rebuilt: fields, children, item templates, options, rule lists, dependency
     /// lists and attribute bags. What is <em>shared</em> is everything with no state to corrupt — rule
     /// instances, conditions, and the delegates behind <see cref="BlazorFormFieldDefinition.Computed"/>,
-    /// <see cref="BlazorFormFieldDefinition.OptionsProvider"/> and
-    /// <see cref="BlazorFormFieldDefinition.OnChanged"/>. Values stashed in an attribute bag are
+    /// <see cref="BlazorFormFieldDefinition.OptionsProvider"/>,
+    /// <see cref="BlazorFormFieldDefinition.OnChanged"/> and
+    /// <see cref="BlazorFormFieldDefinition.Normalize"/>. Values stashed in an attribute bag are
     /// shared too, since the library cannot know how to copy an arbitrary object; a copy is only as
     /// independent as what the caller put in there.
     /// </para>
@@ -154,6 +155,7 @@ public sealed class BlazorFormDefinition
                 ComputedDependencies = new List<string>(field.ComputedDependencies),
                 RevalidateOn = new List<string>(field.RevalidateOn),
                 OnChanged = field.OnChanged,
+                Normalize = field.Normalize,
                 MinLength = field.MinLength,
                 MaxLength = field.MaxLength,
                 Min = field.Min,
@@ -172,6 +174,7 @@ public sealed class BlazorFormDefinition
                 ColumnSpan = field.ColumnSpan,
                 VisibleWhen = field.VisibleWhen,
                 DisabledWhen = field.DisabledWhen,
+                ReadOnlyWhen = field.ReadOnlyWhen,
                 RequiredWhen = field.RequiredWhen,
                 ClearOnHide = field.ClearOnHide,
                 Validators = new List<IBlazorFormValidationRule>(field.Validators),
@@ -222,6 +225,12 @@ public sealed class BlazorFormDefinition
                     diagnostics.Add(new BlazorFormSchemaDiagnostic(name,
                         $"Step '{step.Id}' lists a field that is not in the schema; it will render nothing."));
             }
+
+            // A step's condition is checked exactly as a field's is. A dependency naming nothing reads
+            // as null forever, so the step is either always shown or never shown — and "never shown" on
+            // a wizard means a page of questions the user is never asked and a set of answers the
+            // schema quietly drops.
+            CheckPaths(step.VisibleWhen?.Dependencies, string.Empty, $"Step '{step.Id}' VisibleWhen", diagnostics);
         }
 
         // Two fields both asking for focus is a race the schema cannot win: whichever renders last
@@ -320,6 +329,7 @@ public sealed class BlazorFormDefinition
 
             CheckPaths(field.VisibleWhen?.Dependencies, path, "VisibleWhen", into);
             CheckPaths(field.DisabledWhen?.Dependencies, path, "DisabledWhen", into);
+            CheckPaths(field.ReadOnlyWhen?.Dependencies, path, "ReadOnlyWhen", into);
             CheckPaths(field.RequiredWhen?.Dependencies, path, "RequiredWhen", into);
             CheckPaths(field.ComputedDependencies, path, "a computed dependency", into);
             CheckPaths(field.OptionsDependencies, path, "an options dependency", into);

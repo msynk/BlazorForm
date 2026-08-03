@@ -19,7 +19,7 @@ namespace BlazorForm;
 /// UI intent that JSON Schema cannot express travels in <c>x-</c> extensions: <c>x-widget</c>,
 /// <c>x-order</c>, <c>x-placeholder</c>, <c>x-autocomplete</c>, <c>x-columns</c>, <c>x-colSpan</c>,
 /// <c>x-accept</c>, <c>x-multiple</c>, <c>x-clearOnHide</c>, <c>x-visibleWhen</c>,
-/// <c>x-disabledWhen</c>, <c>x-requiredWhen</c>, <c>x-steps</c> and <c>enumNames</c>.
+/// <c>x-disabledWhen</c>, <c>x-readOnlyWhen</c>, <c>x-requiredWhen</c>, <c>x-steps</c> and <c>enumNames</c>.
 /// </para>
 /// </remarks>
 public static class BlazorFormJsonSchemaImporter
@@ -172,18 +172,38 @@ public static class BlazorFormJsonSchemaImporter
             ApplyConditionalRequiredness(ctx, schema, field.Children);
             field.Children = field.Children.OrderBy(c => c.Order).ToList();
         }
-        else if (fieldType == BlazorFormFieldType.Array)
+        // The declared JSON type decides this, not the control the field ended up as. A multi-select is
+        // `"type": "array"` carrying its choices as a top-level `enum`, which reads as a Select before
+        // the widget hint corrects it — and testing the mapped type meant `minItems`, `maxItems` and
+        // `uniqueItems` were skipped for exactly the fields most likely to declare them. "Choose at
+        // least one" survived the export and was dropped on the way back in.
+        else if (IsArraySchema(type, fieldType, field.Type))
         {
-            BuildArrayItems(ctx, field, schema);
+            BuildArrayItems(ctx, field, schema, widget);
         }
 
         return field;
     }
 
-    private static void BuildArrayItems(ImportContext ctx, BlazorFormFieldDefinition field, JsonElement schema)
+    /// <summary>
+    /// Whether this schema describes an array's contents, whatever control it renders as. A field is
+    /// one when the document says <c>"type": "array"</c>, or when the mapping arrived at a type that
+    /// holds several values.
+    /// </summary>
+    private static bool IsArraySchema(string? declaredType, BlazorFormFieldType mapped, BlazorFormFieldType actual)
+        => string.Equals(declaredType, "array", StringComparison.Ordinal)
+           || mapped == BlazorFormFieldType.Array
+           || actual is BlazorFormFieldType.Array or BlazorFormFieldType.MultiSelect or BlazorFormFieldType.Tags;
+
+    private static void BuildArrayItems(
+        ImportContext ctx, BlazorFormFieldDefinition field, JsonElement schema, string? widget)
     {
+        // A field the widget hint has already settled — an exported multi-select or tag list — has no
+        // per-row template to build; only its size constraints are still to read, at the bottom.
+        var buildTemplate = field.Type is BlazorFormFieldType.Array;
+
         // 2020-12 renamed the tuple form to prefixItems; the single-schema `items` is what forms use.
-        if (schema.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object)
+        if (buildTemplate && schema.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Object)
         {
             var resolvedItems = ctx.MergeAllOf(ctx.CollapseUnion(ctx.Resolve(items)));
             var itemFieldType = MapType(ReadTypeName(resolvedItems), ReadString(resolvedItems, "format"), resolvedItems);
@@ -203,13 +223,33 @@ public static class BlazorFormJsonSchemaImporter
             }
         }
 
+        var uniqueItems = schema.TryGetProperty("uniqueItems", out var unique) && unique.ValueKind == JsonValueKind.True;
+
+        // An array of a fixed set of choices, each usable once, is a set of tick boxes rather than a
+        // repeater — "add a row, open a dropdown, pick Monday; add a row, open a dropdown, pick
+        // Tuesday" is the wrong shape for a question with three answers. This is the rule
+        // react-jsonschema-form uses, and `uniqueItems` is what makes it safe: without it the document
+        // is explicitly allowing the same value twice, which only a repeater can express.
+        //
+        // A document that named its own control is taken at its word, so a schema this library
+        // exported — which always writes `x-widget` — comes back as the form it left as. The default
+        // is only for a schema that never said.
+        if (buildTemplate && uniqueItems && widget is null
+            && field.Type == BlazorFormFieldType.Array
+            && field.ItemTemplate is { Type: BlazorFormFieldType.Select, Options.Count: > 0 } choices)
+        {
+            field.Type = BlazorFormFieldType.MultiSelect;
+            foreach (var option in choices.Options) field.Options.Add(option);
+            field.ItemTemplate = null;
+            uniqueItems = false; // a set cannot hold a duplicate, so the rule has nothing left to say
+        }
+
         if (schema.TryGetProperty("minItems", out var mi) && mi.TryGetInt32(out var minI)) field.MinItems = minI;
         if (schema.TryGetProperty("maxItems", out var ma) && ma.TryGetInt32(out var maxI)) field.MaxItems = maxI;
         if (field.MinItems is not null || field.MaxItems is not null)
             field.AddValidator(new BlazorFormCollectionSizeRule(field.MinItems, field.MaxItems));
 
-        if (schema.TryGetProperty("uniqueItems", out var unique) && unique.ValueKind == JsonValueKind.True)
-            field.AddValidator(new BlazorFormUniqueItemsRule());
+        if (uniqueItems) field.AddValidator(new BlazorFormUniqueItemsRule());
     }
 
     // ---------------------------------------------------------------- keyword mapping
@@ -284,6 +324,7 @@ public static class BlazorFormJsonSchemaImporter
 
         field.Type = widget switch
         {
+            "array" => BlazorFormFieldType.Array,
             "textarea" => BlazorFormFieldType.TextArea,
             "radio" => BlazorFormFieldType.Radio,
             "multiselect" => BlazorFormFieldType.MultiSelect,
@@ -452,6 +493,8 @@ public static class BlazorFormJsonSchemaImporter
             field.VisibleWhen = BlazorFormConditionJson.Read(visible);
         if (schema.TryGetProperty("x-disabledWhen", out var disabled))
             field.DisabledWhen = BlazorFormConditionJson.Read(disabled);
+        if (schema.TryGetProperty("x-readOnlyWhen", out var readOnly))
+            field.ReadOnlyWhen = BlazorFormConditionJson.Read(readOnly);
         if (schema.TryGetProperty("x-requiredWhen", out var requiredWhen))
             field.RequiredWhen = BlazorFormConditionJson.Read(requiredWhen);
     }

@@ -130,6 +130,18 @@ public sealed class BlazorFormFieldDefinition
     /// </remarks>
     public BlazorFormChangeHandler? OnChanged { get; set; }
 
+    /// <summary>
+    /// Tidies the value once the user has finished with it — trimming, case folding, stripping
+    /// formatting characters. Runs on blur and once more for every field on submit, so a value that
+    /// reaches the model has been through it whether or not the user ever visited the box.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not run per keystroke: trimming as the user types eats the space between two words
+    /// the moment it is pressed. What it writes does not mark the field touched — tidying up after
+    /// someone is not the same as them having been there.
+    /// </remarks>
+    public BlazorFormValueNormalizer? Normalize { get; set; }
+
     // --- Constraints (also surfaced as native input attributes) ---
     public int? MinLength { get; set; }
     public int? MaxLength { get; set; }
@@ -187,6 +199,19 @@ public sealed class BlazorFormFieldDefinition
 
     /// <summary>When set and evaluates true, the field is disabled.</summary>
     public IBlazorFormCondition? DisabledWhen { get; set; }
+
+    /// <summary>
+    /// When set and evaluates true, the field is read-only. Evaluated in addition to
+    /// <see cref="ReadOnly"/>, so a field can be locked by circumstance without a second schema.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="DisabledWhen"/> on purpose, and the distinction matters more than it
+    /// looks: a disabled control is skipped by keyboard navigation and is not read out at all, so
+    /// "this answer is settled — an invoice that has been sent, a field the approver owns" becomes a
+    /// value a screen-reader user simply cannot reach. Read-only keeps it focusable, readable and
+    /// copyable, which is what "you may look but not change" actually means.
+    /// </remarks>
+    public IBlazorFormCondition? ReadOnlyWhen { get; set; }
 
     /// <summary>
     /// When set, the field is required only while the condition holds. Evaluated in addition to

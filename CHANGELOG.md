@@ -8,6 +8,50 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`ReadOnlyWhen(...)`** — the fourth conditional, and the one that was missing. Visibility, enabled
+  and requiredness could all be decided by the data; whether a field was *locked* could not, so a
+  settled answer — an invoice that has been sent, a field the approver owns — had to borrow
+  `DisabledWhen`. That is not the same thing: a disabled control leaves the tab order and is not
+  announced at all, so a value the user still needs to read off becomes one a keyboard or
+  screen-reader user cannot reach. Read-only keeps it reachable, readable and copyable. Scoped to the
+  owning object like every other condition, so it means *that row* inside a repeater; it round-trips
+  through JSON as `x-readOnlyWhen`, and `Definition.Validate()` checks where it points.
+- **`Normalize(...)` and `Trim()`** — tidy the value rather than complaining about it. A rule that
+  rejects `" a@b.com "` for its surrounding spaces is technically correct and of no use to anyone: the
+  user cannot see the difference, and trimming inside the rule fixes the message while leaving the
+  untidy value in the model. Normalizers run when the user leaves the field and once more over every
+  field on submit — so one nobody visited is tidied too — and never per keystroke, which would eat the
+  space between two words the moment it was typed. `Trim()` turns whitespace-only into null, so a
+  required field is not satisfied by `"   "`. React Hook Form spells this `setValueAs`.
+- **`Range(...)` takes dates and times.** `Range(DateTime.Today, DateTime.Today.AddMonths(6))` and
+  `Range(new TimeOnly(14, 0), new TimeOnly(22, 0))` say what they mean, instead of the caller having
+  to convert to OLE automation numbers by hand and read a message that reported one back.
+- **`IsSubmitSuccessful`** — whether the last submit passed validation *and* its handler returned
+  without throwing. `IsValid` cannot do the job a "Saved." banner needs: it goes back to true the
+  moment the user corrects their last error, long before anything is saved, and says nothing at all
+  about whether the save then failed. React Hook Form spells it the same way.
+- **`BlazorFormView.ConfigureState`** — configure the state the view builds for you, in place. Wanting
+  one line ("validate on blur", "wire up this validator", "log a failed options lookup") otherwise
+  meant giving up the `Definition` + `Model` shorthand entirely and constructing, holding and
+  disposing a `BlazorFormState` by hand. Runs once per state, before the first render, and is ignored
+  when a `State` is supplied — that one is already the caller's to configure.
+- **`--ff-max-width`** — the form's width is a theme token like everything else, rather than a
+  hard-coded rule to be fought with a more specific selector.
+- **`BlazorFormView.SubmittingText`** — the submit button says what it is doing while validation or
+  the save is in flight, instead of only going grey. A greyed-out button with an unchanged label reads
+  as broken rather than busy, and told a screen-reader user nothing at all about why pressing it
+  appeared to do nothing. Falls back to the message provider (`ui.submitting`).
+- `Definition.Validate()` checks a wizard step's `VisibleWhen` dependencies, which were the one set of
+  condition paths it never looked at. A dependency naming nothing reads as null forever, so the step is
+  either always shown or never shown — and "never shown" on a wizard is a page of questions the user is
+  never asked and a set of answers the schema quietly drops.
+- **`IsValidatingField(path)` / `ValidatingFields`** — which field an async rule is currently checking,
+  so a remote uniqueness lookup can put a spinner beside its own box instead of declaring the whole
+  form busy and grey out a submit button that has nothing to do with it. Reported only for fields that
+  actually have an async rule, so an ordinary form never flickers. Also carried on `GetFieldState`
+  and on the renderer's field context. React Hook Form spells the set `validatingFields`; TanStack
+  Form spells it `field.state.meta.isValidating`.
+
 - **`RevalidateOn(...)`** — the other half of a cross-field rule. A rule that compares two values lives
   on one of them, so only one of the two changes ever runs it: the user mistypes the confirmation, is
   told the two do not match, then fixes the *password* to agree with what they typed — and the message
@@ -146,6 +190,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **A collection of enum members generates a multi-select, not a repeater.** A `List<TDay>` used to
+  render as add-a-row, open-a-dropdown, pick-Monday, add-a-row, open-a-dropdown, pick-Tuesday — for a
+  question with three possible answers. A `[Flags]` enum has always been a set of tick boxes and holds
+  exactly the same information; so does the list. Arrays, `List<T>` and nullable elements all count,
+  and the choices come from the element type. A list of anything that is *not* a closed set is still a
+  repeater, which is what a repeater is for.
+- **The same, for JSON Schema.** `{"type":"array","uniqueItems":true,"items":{"enum":[…]}}` imports as
+  a multi-select — the rule react-jsonschema-form uses. Without `uniqueItems` the document is
+  explicitly allowing a value twice, which only a repeater can express, so it stays one.
+
 - **Conditions are scoped to the object that owns the field.** A `VisibleWhen`/`DisabledWhen`/
   `RequiredWhen`/`MatchesField` written on a repeater's item template now means *this row*, matching
   how computed dependencies have always worked. Absolute paths still resolve, because the scope falls
@@ -177,6 +231,71 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **`AddBlazorForm(configure)` silently did nothing on a second call.** The registration is `TryAdd`,
+  so an application registering its custom renderers after a component library or a shared module had
+  already called `AddBlazorForm()` built a registry, configured it, discarded it, and was left with a
+  renderer key that resolved to nothing — and a field that threw at render time naming a key the
+  developer could see themselves registering. A later call now configures the registry that is there.
+- **A multi-select lost its size bounds on a JSON round trip.** `minItems`, `maxItems` and
+  `uniqueItems` were read only when the *mapped control* was a repeater — and a multi-select is
+  `"type": "array"` carrying its choices as a top-level `enum`, which reads as a select until the
+  widget hint corrects it. "Choose at least one" survived the export and was dropped on the way back
+  in. The declared JSON type decides this now, not the control it renders as.
+- **A second message on a field was recorded and never shown.** A field decides whether to redraw by
+  comparing its message list's *identity* — the cheapest correct test, because a validation pass
+  always rebuilds the list. Anything that appended to the list instead left the identity unchanged, so
+  the field concluded it had nothing new to draw: a second `SetServerError` on a box that was already
+  reporting something went into the state and never onto the page. Messages are now written
+  copy-on-write, and the invariant the render check depends on holds everywhere.
+- **A generated form was ordered by file layout, not by inheritance.** Property order came from
+  metadata tokens alone, which run in declaration order within a file — so moving a base class below
+  its derived class silently reversed the form, and a base class in another assembly produced an
+  interleaving that meant nothing at all. Inherited fields now come first, root base class down, and
+  `[Display(Order)]` still wins over both.
+- **A required file field could be focused but not seen.** `<InputFile>` is a component rather than an
+  element, so focus lands on the wrapper around it — and the wrapper was the one focusable container
+  in the stylesheet with no focus ring. A keyboard user pressed submit, was told there was a problem,
+  was moved to the file field, and had nothing on screen telling them where they now were.
+- **Enter on a wizard step submitted the whole form.** Pressing Enter in a text box submits the form
+  it belongs to — the browser does that whether or not a submit button is on the page — so a user
+  halfway through a four-step wizard was answered with a validation pass over every step, and a wall
+  of errors about questions they had not been asked yet. Enter now advances, exactly as the Next
+  button does. `BlazorFormView.SubmitAsync()` still submits, because a caller asking for that has said
+  so.
+- **Debouncing did the waiting without ever running the check.** `UpdateOnInput(debounceMilliseconds:
+  400)` is documented as the difference between a remote uniqueness check that is usable and one that
+  is not — and then the write it performed skipped the async rules exactly as an undebounced keystroke
+  does, so the check only ever ran on blur. A pause is what a debounce exists to detect, and it is now
+  where the async rules run. An undebounced field is unchanged: it still waits for blur, because one
+  request per character is the thing being avoided.
+- **A repeater told only half the engine about itself.** Adding, removing, moving, duplicating or
+  clearing rows changes the value the list binds to as surely as typing does, but only the recompute
+  sweep ran: `VisibleWhen("Lines", IsNotEmpty)` with `ClearOnHide` never fired when the last line was
+  deleted, a select loading its choices from the list never reloaded, and a wizard step conditional on
+  the list was never re-clamped. Every row operation now runs the same sweeps every other change runs.
+- **`SetServerErrors` threw away a conversion failure.** A value the model could never accept — `abc`
+  in a field bound to an `int` — never reached the server, so the server has no opinion about it; but
+  replacing the message set with the server's took its complaint with it, leaving the box showing text
+  the model does not hold and nothing on the page to say why.
+- **A date range was never enforced.** `[Range(typeof(DateTime), "2024-01-01", "2024-12-31")]` was
+  read by the scanner, stored, and rendered as the input's `min`/`max` — and then the rule behind it
+  skipped every date it was handed, because it could only compare numbers and a `DateTime` is not one.
+  The form declared a window, the picker refused to leave it, and typing a date past the picker was
+  accepted silently. Dates, times and timestamps are now compared on the same scale the bound is
+  stored on, and a message about a date window names dates rather than the number `45292`.
+- **A cascading select's cleared value told nobody.** Changing the country emptied the city, and that
+  was the end of it: the *next* level of the chain kept a value chosen for the region it no longer
+  belonged to, a computed total that read the cleared field kept its old figure, a `VisibleWhen`
+  watching it never re-evaluated, the message describing the answer that had just been taken away
+  stayed on screen, and an autosave listening to `OnFieldChanged` never saw it go. Emptying a
+  dependent now runs the same sweeps a typed-in change does, which is what `ClearOnHide` has always
+  done. A value written before its control ever rendered — a prefill, a restored draft — is cleared
+  too, rather than surviving on the technicality that no option list had been fetched for it yet.
+- **A combobox no longer tells assistive technology that its list is closed.** An `<input list>` is
+  already a combobox in the accessibility tree, so the hand-written `role="combobox"` added nothing
+  and took on `aria-expanded`'s contract — state only the browser has, and which was therefore
+  hard-coded to `"false"`: an assertion that the popup is shut, made to a screen-reader user at the
+  exact moment it is open. Both attributes are gone and the platform's own semantics stand.
 - **`UseDataAnnotations()` and `UseFluentValidation()` no longer cancel each other out.** A form has
   one external-validator slot and every integration assigned to it, so wiring up both — which is a
   perfectly reasonable thing to want, since they cover different rules — meant whichever line came

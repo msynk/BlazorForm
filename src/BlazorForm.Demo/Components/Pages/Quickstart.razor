@@ -5,11 +5,19 @@
 
 <div class="demo-intro">
     <h1>From a C# type</h1>
-    <p>One line generates a complete form from any POCO. Labels, field types, options and validation come from the type and its DataAnnotations.</p>
+    <p>
+        One line generates a complete form from any POCO. Labels, field types, options and validation
+        come from the type and its DataAnnotations — and fields inherited from a base class come first,
+        in the order the class reads.
+    </p>
 </div>
 
 <div class="demo-card">
-    <BlazorFormView Definition="_schema" Model="_model" OnValidSubmit="HandleSubmit" SubmitText="Create account" />
+    @* ConfigureState settles the state the view builds for you, so wanting one setting does not mean
+   constructing, holding and disposing a BlazorFormState by hand. *@
+<BlazorFormView Definition="_schema" Model="_model"
+                ConfigureState="s => s.ValidationTrigger = BlazorFormValidationTrigger.OnBlur"
+                OnValidSubmit="HandleSubmit" SubmitText="Create account" />
 </div>
 
 @if (_submitted)
@@ -31,7 +39,11 @@
 @page "/quickstart"
 @rendermode InteractiveServer
 
-<BlazorFormView Definition="_schema" Model="_model" OnValidSubmit="HandleSubmit" SubmitText="Create account" />
+@* ConfigureState settles the state the view builds for you, so wanting one setting does not mean
+   constructing, holding and disposing a BlazorFormState by hand. *@
+<BlazorFormView Definition="_schema" Model="_model"
+                ConfigureState="s => s.ValidationTrigger = BlazorFormValidationTrigger.OnBlur"
+                OnValidSubmit="HandleSubmit" SubmitText="Create account" />
 
 @code {
     private readonly AccountSignup _model = new();
