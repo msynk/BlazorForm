@@ -11,6 +11,7 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
     private bool _autofocusApplied;
     private string? _pendingRaw;
     private bool _hasPendingRaw;
+    private BlazorFormFieldContext? _pendingContext;
     private int? _liveLength;
     private string? _lastCommitted;
 
@@ -52,6 +53,20 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
     /// <summary>Value for <c>aria-required</c>, or null to omit the attribute.</summary>
     protected string? AriaRequired => Context.IsRequired ? "true" : null;
 
+    /// <summary>Id of the visually hidden "required" note a group of controls points at.</summary>
+    protected string RequiredHintId => Context.ElementId + "_required";
+
+    /// <summary>
+    /// <c>aria-describedby</c> for a <c>role="group"</c> — a multi-select or a tag list. ARIA does not
+    /// allow <c>aria-required</c> on a group, and the asterisk beside the label is hidden from assistive
+    /// technology, so without this a screen-reader user was never told the field had to be answered.
+    /// The group is described by a hidden note instead (see <see cref="RequiredHintId"/>), ahead of its
+    /// help text and messages.
+    /// </summary>
+    protected string? GroupDescribedBy => !Context.IsRequired ? DescribedBy
+        : DescribedBy is { } described ? RequiredHintId + " " + described
+        : RequiredHintId;
+
     /// <summary>
     /// The accessible name to use when the visible label is suppressed. Null the rest of the time,
     /// because a real <c>&lt;label&gt;</c> already points at the control and an <c>aria-label</c> would
@@ -78,9 +93,18 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
     /// </summary>
     protected bool UpdatesOnInput => Field.UpdateOn == BlazorFormUpdateTrigger.Input;
 
-    /// <summary>Handles the browser's <c>change</c> event, ignoring it for input-driven fields.</summary>
+    /// <summary>
+    /// Handles the browser's <c>change</c> event. An input-driven field has already written every
+    /// keystroke — except one still waiting out its debounce, which is written now.
+    /// </summary>
+    /// <remarks>
+    /// Pressing Enter in a text box commits it (<c>change</c>) and then submits the form, with no blur in
+    /// between. A debounced field used to ignore the commit, so the submit — or the wizard's Next —
+    /// judged the value as it stood one pause ago, and on a wizard the step then went away and took the
+    /// half-written text with it.
+    /// </remarks>
     protected Task OnChange(ChangeEventArgs e)
-        => UpdatesOnInput ? Task.CompletedTask : Context.SetFromStringAsync(e.Value?.ToString());
+        => UpdatesOnInput ? FlushAsync() : Context.SetFromStringAsync(e.Value?.ToString());
 
     /// <summary>
     /// Handles the browser's <c>input</c> event. It is only wired at all when something needs it (see
@@ -170,17 +194,25 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
         CancelDebounce();
         _pendingRaw = raw;
         _hasPendingRaw = true;
+        // The field the keystroke was typed into. A wizard reuses this component for whatever field
+        // sits in the same place on the next step, so by the time the delay elapses Context may be
+        // somebody else's — and writing there would put one answer into another question.
+        var context = _pendingContext = Context;
 
         var cts = _debounce = new CancellationTokenSource();
         try
         {
             await Task.Delay(delay, cts.Token);
+            // Read again rather than trusting the one captured above: a repeater row that moved while
+            // the timer ran has been retargeted to its new path (see OnParametersSet).
+            context = _pendingContext ?? context;
             _hasPendingRaw = false;
+            _pendingContext = null;
             // Async rules run here and only here on the typing path. A pause is what a debounce exists
             // to detect, and it is the moment a remote uniqueness check stops being one request per
             // character and becomes one request per thing the user actually typed — which is the whole
             // reason the field asked to be debounced. An undebounced field still waits for blur.
-            await Context.SetFromStringAsync(raw, includeAsync: true);
+            await context.SetFromStringAsync(raw, includeAsync: true);
         }
         catch (OperationCanceledException)
         {
@@ -207,20 +239,68 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
         if (!_hasPendingRaw) return;
 
         var raw = _pendingRaw;
+        var context = _pendingContext ?? Context;
         _hasPendingRaw = false;
         _pendingRaw = null;
+        _pendingContext = null;
         CancelDebounce();
-        await Context.SetFromStringAsync(raw);
+        await context.SetFromStringAsync(raw);
+    }
+
+    /// <summary>
+    /// Writes a pending debounced value synchronously, to the field it was typed into, without
+    /// revalidating. For the moments nothing can be awaited and the control is about to stop being that
+    /// field: disposal, and being handed a different field to render.
+    /// </summary>
+    /// <remarks>
+    /// Only while that field is still somewhere the user could see it. A control also goes away because
+    /// a condition hid it or its row was removed, and writing then undid exactly what the form had just
+    /// done: a <c>ClearOnHide</c> field got its value back while hidden, and a removed repeater row was
+    /// re-created to hold the text.
+    /// </remarks>
+    private void WritePendingNow()
+    {
+        if (!_hasPendingRaw) return;
+
+        var raw = _pendingRaw;
+        var context = _pendingContext ?? Context;
+        _hasPendingRaw = false;
+        _pendingRaw = null;
+        _pendingContext = null;
+        CancelDebounce();
+        if (context is null || !context.State.IsLive(context.Field, context.Path)) return;
+
+        var field = context.Field;
+        context.State.SetValue(context.Path, BlazorFormValueConverter.FromInputString(raw, field.ValueType, field.Type, context.Value));
     }
 
     protected override void OnParametersSet()
     {
+        if (_hasPendingRaw && !ReferenceEquals(_pendingContext, Context))
+        {
+            // The same field of the same form at a new path is a repeater row that moved — the component
+            // follows its row — so the pending text moves with it. Writing it to the old path would put
+            // it into whichever row now stands there.
+            if (_pendingContext is { } pending && ReferenceEquals(pending.State, Context.State)
+                && ReferenceEquals(pending.Field, Context.Field))
+                _pendingContext = Context;
+            // Handed a different field — the next wizard step reusing this component — with the
+            // previous field's last keystrokes still waiting: they belong to that field, so they land
+            // there now.
+            else
+                WritePendingNow();
+        }
+
         // Registered per path so the form can send focus here — "jump to the first error" and the error
-        // summary's links both end up going through this.
-        if (_focusRegistration is null || _registeredPath != Context.Path)
+        // summary's links both end up going through this. Per state too: a view handed a new model
+        // builds a new state but keeps these components, and a registration left on the old, disposed
+        // state meant nothing on the new one could ever be focused.
+        if (_focusRegistration is null || _registeredPath != Context.Path
+            || !ReferenceEquals(_registeredState, Context.State))
         {
             _focusRegistration?.Dispose();
             _registeredPath = Context.Path;
+            _registeredState = Context.State;
             _focusRegistration = Context.State.RegisterFocusTarget(_registeredPath, FocusAsync);
         }
 
@@ -240,6 +320,22 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
 
     private IDisposable? _focusRegistration;
     private string? _registeredPath;
+    private BlazorFormState? _registeredState;
+
+    /// <summary>
+    /// Moves focus to the control once the render in progress has reached the browser — for a control
+    /// whose element is about to be replaced, where focusing it now would focus the one on its way out.
+    /// </summary>
+    protected void RequestFocusAfterRender() => _focusRequested = true;
+
+    /// <summary>
+    /// Asks for the field's loaded options, unless the last attempt failed. A failure is shown in place
+    /// of the choices and retried when something invalidates it — a dependency changing, or
+    /// <see cref="BlazorFormState.InvalidateOptions"/>. Retrying on every render instead turned a
+    /// provider that is down into a request per re-render, and a render per request.
+    /// </summary>
+    protected Task LoadOptionsAsync()
+        => Context.OptionsFailed ? Task.CompletedTask : Context.EnsureOptionsAsync().AsTask();
 
     /// <summary>
     /// Applies <see cref="BlazorFormFieldDefinition.Autofocus"/> for real. The HTML attribute of the
@@ -288,6 +384,13 @@ public abstract class BlazorFormInputBase : ComponentBase, IDisposable
 
     public virtual void Dispose()
     {
+        // A debounced value still waiting out its delay is written, not dropped. The control goes away
+        // when its wizard step does or a condition hides it, and the user's last characters are in the
+        // box they were looking at — losing them because the timer had not fired yet would be the form
+        // discarding what was typed into it. Written without revalidating: the control that would show
+        // the verdict is the thing being removed, and the next submit judges it anyway.
+        WritePendingNow();
+
         CancelDebounce();
         _focusRegistration?.Dispose();
         _focusRegistration = null;

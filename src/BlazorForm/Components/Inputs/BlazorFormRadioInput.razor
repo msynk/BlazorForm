@@ -9,8 +9,11 @@
    before the user arrows through the options — which is how a radio group is meant to be navigated. *@
 @* Splat first, exactly as every other renderer does: the schema's extra attributes land on the group
    (there is no single control to put them on), and everything below overrides them so a stray
-   aria-labelledby cannot unhook the group's name. *@
+   aria-labelledby cannot unhook the group's name. The field's id goes on the group for the same
+   reason the tag list's does: it is what an error-summary link points at, and with no element
+   carrying it the link led nowhere. *@
 <div @attributes="ExtraAttributes"
+     id="@Context.ElementId"
      class="ff-radio-group"
      @ref="Element"
      tabindex="-1"
@@ -39,7 +42,7 @@
 </div>
 
 @code {
-    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+    protected override Task OnParametersSetAsync() => LoadOptionsAsync();
 
     // Option values become part of a DOM id, so anything that is not id-safe is folded to '_'. The
     // index goes in too: folding makes "en-US" and "en_US" the same string, and two options sharing an

@@ -1,4 +1,5 @@
 @namespace BlazorForm
+@implements IDisposable
 
 @if (_field is not null)
 {
@@ -13,7 +14,9 @@
     /// </summary>
     /// <remarks>
     /// Pair it with <c>ShowSubmitButton="false"</c> on a <see cref="BlazorFormView"/>, or drive a
-    /// <see cref="BlazorFormState"/> directly and supply your own <c>&lt;form&gt;</c>.
+    /// <see cref="BlazorFormState"/> directly and supply your own <c>&lt;form&gt;</c>. The field follows
+    /// the state by itself — a message, a condition, a list of options arriving — so the page does not
+    /// have to subscribe to <see cref="BlazorFormState.StateChanged"/> just to keep it current.
     /// </remarks>
 
     /// <summary>The form the field belongs to.</summary>
@@ -33,13 +36,38 @@
     [Parameter] public bool ThrowIfMissing { get; set; }
 
     private BlazorFormFieldDefinition? _field;
+    private BlazorFormState? _subscribed;
 
     protected override void OnParametersSet()
     {
+        // Subscribed for itself. Typing into the control re-renders only the control, so without this
+        // the message under it, the red border and the label never moved: the input said
+        // aria-invalid="true" and pointed aria-describedby at a message list that was never drawn,
+        // a condition the answer satisfied never showed its field, and a select whose options had
+        // finished loading went on saying "Loading…". Inside a page that re-renders on the same event
+        // this costs nothing extra — a component already queued to render is not queued twice.
+        if (!ReferenceEquals(_subscribed, State))
+        {
+            Unsubscribe();
+            _subscribed = State;
+            _subscribed.StateChanged += OnStateChanged;
+        }
+
         _field = State.Definition.FindByPath(Name);
 
         if (_field is null && ThrowIfMissing)
             throw new InvalidOperationException(
                 $"{nameof(BlazorFormField)}: no field named '{Name}' exists in this form's schema.");
     }
+
+    private void OnStateChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void Unsubscribe()
+    {
+        if (_subscribed is null) return;
+        _subscribed.StateChanged -= OnStateChanged;
+        _subscribed = null;
+    }
+
+    public void Dispose() => Unsubscribe();
 }

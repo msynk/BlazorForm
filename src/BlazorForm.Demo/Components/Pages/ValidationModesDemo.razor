@@ -108,7 +108,7 @@
                 // runs with that write, which is the whole reason to debounce a field that calls out
                 // to a service. An undebounced field's async rules still wait for blur.
                 .UpdateOnInput(debounceMilliseconds: 400)
-                .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", default),
+                .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", ctx.CancellationToken),
                            "That username is taken.")
                 .Help("Try 'ada' or 'admin' to see the async rule fire."))
             .Field(x => x.Password, f => f.Autocomplete("new-password"))
@@ -146,7 +146,7 @@
                 .Trim()
                 .UpdateOnInput(debounceMilliseconds: 400)
                 // A spinner beside this one box, not a form that declares itself busy: state.IsValidatingField("Username")
-                .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", default),
+                .MustAsync(async ctx => await Directory.IsUsernameAvailableAsync((string?)ctx.Value ?? "", ctx.CancellationToken),
                            "That username is taken.")
                 .Help("Try 'ada' or 'admin' to see the async rule fire."))
             .Field(x => x.Password, f => f.Autocomplete("new-password"))
@@ -184,5 +184,11 @@
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
     }
 
-    public void Dispose() => _state.StateChanged -= OnStateChanged;
+    public void Dispose()
+    {
+        _state.StateChanged -= OnStateChanged;
+        // The page created the state, so the page disposes it: an options load or async rule still in
+        // flight is cancelled instead of finishing against a form nobody is looking at.
+        _state.Dispose();
+    }
 }

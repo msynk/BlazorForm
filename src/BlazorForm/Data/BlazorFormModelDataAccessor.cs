@@ -26,7 +26,8 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
 
     /// <summary>
     /// True when the most recent <see cref="SetValue"/> could not be applied because the value did not
-    /// convert to the property's type (e.g. "abc" into an <c>int</c>).
+    /// convert to the property's type (e.g. "abc" into an <c>int</c>), or the property has no public
+    /// setter.
     /// </summary>
     public bool LastWriteFailed { get; private set; }
 
@@ -71,7 +72,7 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
             }
 
             var prop = FindProperty(current.GetType(), seg.Name!);
-            if (prop is null || !prop.CanRead) return false;
+            if (prop is null || !IsPubliclyReadable(prop)) return false;
             try { current = prop.GetValue(current); }
             catch (TargetInvocationException) { return false; }
         }
@@ -80,11 +81,39 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
         return true;
     }
 
+    /// <remarks>
+    /// <para>
+    /// A struct on the way to the value — a <c>Point</c> property, an element of a
+    /// <c>List&lt;Point&gt;</c>, a <c>Point?</c> — is read out as a boxed <em>copy</em>. Setting the
+    /// leaf on that copy changes nothing the model can see, and the write used to end there: the user's
+    /// entry vanished on the next render with no message, because nothing had technically failed. So
+    /// every struct the path passed through is written back into its owner, innermost first, until an
+    /// owner is a class (which already holds the object that was changed).
+    /// </para>
+    /// <para>
+    /// A malformed path is reported through <see cref="LastWriteFailed"/> like any other write that
+    /// could not be applied, keeping the promise that writes never throw.
+    /// </para>
+    /// </remarks>
     public void SetValue(string path, object? value)
     {
         LastWriteFailed = false;
-        var segments = BlazorFormPath.Parse(path);
+
+        IReadOnlyList<BlazorFormPathSegment> segments;
+        try
+        {
+            segments = BlazorFormPath.Parse(path);
+        }
+        catch (FormatException)
+        {
+            LastWriteFailed = true;
+            return;
+        }
+
         if (segments.Count == 0) return;
+
+        // Each step taken: the owner, the segment read from it, and what came back.
+        var walked = new List<(object Owner, BlazorFormPathSegment Segment, object Child)>(segments.Count - 1);
 
         object current = Root!;
         for (var i = 0; i < segments.Count - 1; i++)
@@ -108,10 +137,21 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
                     return;
                 }
             }
+            walked.Add((current, seg, child));
             current = child;
         }
 
         WriteSegment(current, segments[^1], value);
+        if (LastWriteFailed) return;
+
+        for (var i = walked.Count - 1; i >= 0; i--)
+        {
+            var (owner, seg, child) = walked[i];
+            if (!child.GetType().IsValueType) break;
+
+            WriteSegment(owner, seg, child);
+            if (LastWriteFailed) return;
+        }
     }
 
     public Type? GetElementType(string arrayPath)
@@ -156,9 +196,43 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
             return target is IList list && seg.Index >= 0 && seg.Index < list.Count ? list[seg.Index] : null;
 
         var prop = FindProperty(target.GetType(), seg.Name!);
-        if (prop is null || !prop.CanRead) return null;
+        if (prop is null || !IsPubliclyReadable(prop)) return null;
         try { return prop.GetValue(target); }
         catch (TargetInvocationException) { return null; }
+    }
+
+    /// <summary>
+    /// Whether a form may write <paramref name="property"/>: it needs a <em>public</em> setter.
+    /// <see cref="PropertyInfo.CanWrite"/> is true for a private, protected or internal one too, and
+    /// reflection calls those without complaint — so <c>Id { get; private set; }</c> and
+    /// <c>IsAdmin { get; internal set; }</c>, which the model's author kept out of reach on purpose,
+    /// rendered as ordinary inputs and took whatever was posted to them. An <c>init</c> accessor is
+    /// public and counts: a form building up a record is exactly what it is for.
+    /// </summary>
+    internal static bool IsPubliclyWritable(PropertyInfo property) => property.SetMethod is { IsPublic: true };
+
+    /// <summary>Whether a form may read <paramref name="property"/>: it needs a public getter, for the same reason.</summary>
+    internal static bool IsPubliclyReadable(PropertyInfo property) => property.GetMethod is { IsPublic: true };
+
+    /// <summary>
+    /// Whether a field bound to <paramref name="property"/> is read-only for want of a public setter.
+    /// </summary>
+    /// <remarks>
+    /// Only where editing actually goes through the setter. A scalar is replaced on every edit, so it
+    /// does. A class-typed group or list is not: its children are written on the object it already
+    /// holds and its rows are added to and removed from the list in place, which is how
+    /// <c>Shipping { get; private set; } = new()</c> and <c>Lines { get; private set; } = new()</c> —
+    /// the usual shape of an EF or domain model — are meant to be edited. Locking those would lock
+    /// every field beneath them. A struct group and an array do need it: a struct is changed by writing
+    /// a modified copy back, and an array cannot grow without being replaced.
+    /// </remarks>
+    internal static bool IsReadOnlyForForm(PropertyInfo property, BlazorFormFieldType fieldType)
+    {
+        if (IsPubliclyWritable(property)) return false;
+        if (fieldType is not (BlazorFormFieldType.Object or BlazorFormFieldType.Array)) return true;
+
+        var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+        return type.IsValueType || type.IsArray;
     }
 
     private void WriteSegment(object target, BlazorFormPathSegment seg, object? value)
@@ -187,7 +261,7 @@ public sealed class BlazorFormModelDataAccessor : IBlazorFormDataAccessor
         }
 
         var prop = FindProperty(target.GetType(), seg.Name!);
-        if (prop is null || !prop.CanWrite) { LastWriteFailed = true; return; }
+        if (prop is null || !IsPubliclyWritable(prop)) { LastWriteFailed = true; return; }
 
         if (!BlazorFormValueConverter.TryCoerce(value, prop.PropertyType, out var result))
         {

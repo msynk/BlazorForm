@@ -8,8 +8,12 @@
    the error summary's link and FocusFirstError silently walked past, on a form whose only problem
    was a missing file. Focus lands on the wrapper, which carries the field's description. *@
 <div class="ff-file" @ref="Element" tabindex="-1" aria-describedby="@DescribedBy">
-    @* Splat first so the renderer's own id and ARIA wiring below always wins. *@
-    <InputFile @attributes="ExtraAttributes"
+    @* Splat first so the renderer's own id and ARIA wiring below always wins. Keyed so that emptying
+       the field replaces the element: a file input's selection lives in the browser, where setting the
+       model to null cannot reach it, so a cleared field went on naming the old file — and choosing that
+       same file again raised no change at all, because as far as the browser knew nothing had. *@
+    <InputFile @key="_generation"
+               @attributes="ExtraAttributes"
                id="@Context.ElementId"
                class="@CssClass"
                multiple="@Field.Multiple"
@@ -62,9 +66,37 @@
             : e.FileCount > 0 ? e.File : null;
 
         await Context.SetValueAsync(value);
+        TrackEmptied();
     }
 
-    private Task Clear() => Context.SetValueAsync(null);
+    // Bumped whenever the field goes from holding files to holding none — the clear button, a Reset(),
+    // a ResetField — so the next render puts a fresh, empty <input type="file"> in place of the old one.
+    private int _generation;
+    private bool _hadFiles;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        TrackEmptied();
+    }
+
+    private void TrackEmptied()
+    {
+        var hasFiles = SelectedFiles.Count > 0;
+        if (_hadFiles && !hasFiles) _generation++;
+        _hadFiles = hasFiles;
+    }
+
+    /// <summary>
+    /// Empties the field. Focus goes back to the field once the fresh input is in place: the button
+    /// that was pressed disappears with the files, and would otherwise leave focus on the page body.
+    /// </summary>
+    private async Task Clear()
+    {
+        await Context.SetValueAsync(null);
+        TrackEmptied();
+        RequestFocusAfterRender();
+    }
 
     private static string FormatSize(long bytes)
     {

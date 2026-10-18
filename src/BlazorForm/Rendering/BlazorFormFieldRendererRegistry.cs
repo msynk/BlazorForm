@@ -66,6 +66,15 @@ public sealed class BlazorFormFieldRendererRegistry : IBlazorFormFieldRendererRe
 
         if (field.Type == BlazorFormFieldType.Custom)
         {
+            // No key at all is a different mistake from an unregistered one, and naming an empty key in
+            // the registration hint sends the developer looking for a typo that is not there. The usual
+            // way to arrive here is a property no built-in control can edit — a byte[] or a Stream.
+            if (string.IsNullOrEmpty(field.CustomRenderer))
+                throw new InvalidOperationException(
+                    $"Field '{field.Name}' is a custom field with no renderer key, so no component can render it. " +
+                    "No built-in control edits a value of this kind (a byte[] or a Stream, say): give it a renderer with " +
+                    ".CustomRenderer(\"key\") and register that key with services.AddBlazorForm(r => r.RegisterCustom(\"key\", typeof(MyComponent))).");
+
             throw new InvalidOperationException(
                 $"Field '{field.Name}' uses the custom renderer key '{field.CustomRenderer}', which is not registered. " +
                 "Register it with services.AddBlazorForm(r => r.RegisterCustom(\"" + field.CustomRenderer + "\", typeof(MyComponent))).");

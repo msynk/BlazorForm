@@ -24,6 +24,12 @@ public static class BlazorFormMessageKeys
     public const string RangeBetween = "range.between";
     public const string RangeMin = "range.min";
     public const string RangeMax = "range.max";
+
+    /// <summary>An exclusive lower bound was not cleared. Arg 0 is the bound.</summary>
+    public const string RangeAbove = "range.above";
+
+    /// <summary>An exclusive upper bound was not stayed under. Arg 0 is the bound.</summary>
+    public const string RangeBelow = "range.below";
     public const string Pattern = "pattern";
     public const string Email = "email";
     public const string Url = "url";
@@ -36,6 +42,9 @@ public static class BlazorFormMessageKeys
     public const string FileType = "file.type";
     public const string PatternTimeout = "pattern.timeout";
     public const string Conversion = "conversion";
+
+    /// <summary>A value that should be a UUID (JSON Schema's <c>format: uuid</c>) is not one.</summary>
+    public const string Uuid = "uuid";
 
     // --- UI chrome ---
     // The library renders text of its own — buttons, placeholders, the empty state of a repeater. It
@@ -160,6 +169,12 @@ public static class BlazorFormMessageKeys
 
     /// <summary>Message for a combobox answered with something that is not one of its choices.</summary>
     public const string OneOf = "oneOf";
+
+    /// <summary>
+    /// Read to assistive technology for a required group of controls — a multi-select or a tag list —
+    /// whose role cannot carry <c>aria-required</c> itself, and whose visible asterisk is decorative.
+    /// </summary>
+    public const string RequiredHint = "ui.required";
 }
 
 /// <summary>The English defaults used when no <see cref="IBlazorFormMessageProvider"/> is registered.</summary>
@@ -176,6 +191,8 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.RangeBetween => $"Must be between {Arg(args, 0)} and {Arg(args, 1)}.",
         BlazorFormMessageKeys.RangeMin => $"Must be at least {Arg(args, 0)}.",
         BlazorFormMessageKeys.RangeMax => $"Must be at most {Arg(args, 0)}.",
+        BlazorFormMessageKeys.RangeAbove => $"Must be greater than {Arg(args, 0)}.",
+        BlazorFormMessageKeys.RangeBelow => $"Must be less than {Arg(args, 0)}.",
         BlazorFormMessageKeys.Pattern => "Invalid format.",
         BlazorFormMessageKeys.PatternTimeout => "This value could not be checked; please simplify it.",
         BlazorFormMessageKeys.Email => "Enter a valid email address.",
@@ -188,6 +205,7 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.FileSize => $"Each file must be {Arg(args, 0)} or smaller.",
         BlazorFormMessageKeys.FileType => $"Only these file types are allowed: {Arg(args, 0)}.",
         BlazorFormMessageKeys.Conversion => $"'{Arg(args, 0)}' is not a valid value for this field.",
+        BlazorFormMessageKeys.Uuid => "Enter a valid UUID.",
 
         BlazorFormMessageKeys.SelectPlaceholder => "-- Select --",
         BlazorFormMessageKeys.SelectLoading => "Loading…",
@@ -224,6 +242,7 @@ public sealed class BlazorFormDefaultMessageProvider : IBlazorFormMessageProvide
         BlazorFormMessageKeys.TagPlaceholder => "Add…",
         BlazorFormMessageKeys.TagCount => $"{Arg(args, 0)} selected",
         BlazorFormMessageKeys.OneOf => "Choose one of the available options.",
+        BlazorFormMessageKeys.RequiredHint => "Required",
 
         _ => key
     };

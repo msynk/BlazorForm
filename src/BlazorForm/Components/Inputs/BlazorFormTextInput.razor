@@ -112,8 +112,15 @@ else
     /// <summary>The colour an empty picker shows — <c>Attr("emptyColor", "#rrggbb")</c>, else black.</summary>
     private string EmptyColour => Attr("emptyColor", "#000000")!;
 
+    /// <summary>
+    /// Whether the control is wrapped. Decided by what the field is configured to offer, never by its
+    /// current value: the wrapper and the bare input are two different places in the tree, so a
+    /// wrapper that appeared with the first character replaced the input element under the caret — a
+    /// clearable live field lost focus on the first keystroke, and the clear button dropped it on the
+    /// page body when it took the wrapper away again.
+    /// </summary>
     private bool HasAffix
-        => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix) || ShowReveal || ShowClear;
+        => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix) || ShowReveal || OffersClear;
 
     private bool _revealed;
 
@@ -129,11 +136,13 @@ else
     /// Whether the field offers a one-click "empty this" button — <c>Attr("clearable", true)</c>, or
     /// the builder's <c>Clearable()</c>. Hidden while there is nothing to clear.
     /// </summary>
-    private bool ShowClear
+    private bool ShowClear => OffersClear && Context.StringValue.Length > 0;
+
+    /// <summary>Whether the field has a clear button at all, whether or not there is anything to clear yet.</summary>
+    private bool OffersClear
         => Attr("clearable", false)
            && Field.Type is not (BlazorFormFieldType.Hidden or BlazorFormFieldType.Color)
-           && !DisabledOrReadOnly
-           && Context.StringValue.Length > 0;
+           && !DisabledOrReadOnly;
 
     private string RevealLabel => Context.Text(_revealed
         ? BlazorFormMessageKeys.PasswordHide
@@ -143,7 +152,23 @@ else
 
     private void ToggleReveal() => _revealed = !_revealed;
 
-    private Task Clear() => Context.SetValueAsync(null);
+    /// <summary>
+    /// Empties the field and puts the caret back in it. The button takes itself away once there is
+    /// nothing left to clear, and the focus it was holding would otherwise fall to the page body.
+    /// </summary>
+    private async Task Clear()
+    {
+        await Context.SetValueAsync(null);
+        await FocusAsync();
+    }
+
+    /// <summary>
+    /// A hidden input cannot take focus: the browser accepts the call and does nothing. Reporting that
+    /// as success stopped focus-the-first-error on an invisible control instead of moving on to one the
+    /// user can see.
+    /// </summary>
+    public override ValueTask<bool> FocusAsync()
+        => Field.Type == BlazorFormFieldType.Hidden ? ValueTask.FromResult(false) : base.FocusAsync();
 
     private bool ShowCounter => Field.ShowCharacterCount && Field.MaxLength is > 0 && Field.Type != BlazorFormFieldType.Hidden;
 

@@ -15,14 +15,14 @@
      role="group"
      aria-labelledby="@(Field.ShowLabel ? Context.LabelId : null)"
      aria-label="@AriaLabel"
-     aria-required="@AriaRequired"
      aria-invalid="@AriaInvalid"
-     aria-describedby="@DescribedBy">
-    @{ var tags = Tags; }
-    @foreach (var tag in tags)
+     aria-describedby="@GroupDescribedBy">
+    @{ var tags = Tags; var keys = KeysFor(tags); }
+    @for (var index = 0; index < tags.Count; index++)
     {
-        var value = tag;
-        <span class="ff-tag" @key="value">
+        var i = index;
+        var value = tags[i];
+        <span class="ff-tag" @key="keys[i]">
             <span class="ff-tag__label">@value</span>
             @if (!DisabledOrReadOnly)
             {
@@ -30,7 +30,7 @@
                    a screen-reader user hearing "remove button" five times learns nothing. *@
                 <button type="button" class="ff-tag__remove"
                         title="@RemoveLabel(value)" aria-label="@RemoveLabel(value)"
-                        @onclick="@(() => RemoveAsync(value))">×</button>
+                        @onclick="@(() => RemoveAtAsync(i, value))">×</button>
             }
         </span>
     }
@@ -58,6 +58,11 @@
     @* Announces the count after every add and remove; the chips themselves are silent. *@
     <p class="ff-sr-only" aria-live="polite">@Announcement</p>
 </div>
+@if (Context.IsRequired)
+{
+    @* A group cannot carry aria-required; GroupDescribedBy points here instead. *@
+    <span id="@RequiredHintId" class="ff-sr-only">@Context.Text(BlazorFormMessageKeys.RequiredHint)</span>
+}
 
 @code {
     private string _draft = "";
@@ -124,7 +129,7 @@
             // only way to undo a tag without reaching for the mouse.
             case "Backspace" when _draft.Length == 0:
                 var tags = Tags;
-                if (tags.Count > 0) await RemoveAsync(tags[^1]);
+                if (tags.Count > 0) await RemoveAtAsync(tags.Count - 1, tags[^1]);
                 break;
         }
     }
@@ -156,11 +161,40 @@
         return Context.SetValueAsync(tags);
     }
 
-    private Task RemoveAsync(string tag)
+    /// <summary>
+    /// Removes the one chip that was pressed. By position, not by value: a list loaded from storage
+    /// can hold the same tag twice, and removing every copy of it took away a chip the user never
+    /// touched. The value is checked against the position, so a list that changed between the render
+    /// and the click still loses the tag the user was looking at.
+    /// </summary>
+    private Task RemoveAtAsync(int index, string tag)
     {
         var tags = Tags;
-        tags.RemoveAll(t => string.Equals(t, tag, StringComparison.Ordinal));
+        if (index < 0 || index >= tags.Count || !string.Equals(tags[index], tag, StringComparison.Ordinal))
+            index = tags.FindIndex(t => string.Equals(t, tag, StringComparison.Ordinal));
+        if (index < 0) return Task.CompletedTask;
+
+        tags.RemoveAt(index);
         return Context.SetValueAsync(tags);
+    }
+
+    /// <summary>
+    /// The render key of every chip. The tag itself where it is unique, so removing one moves the DOM
+    /// with the data; a repeat gets its value and occurrence instead. Typing refuses duplicates, but a
+    /// list loaded from storage can still hold one, and a repeated <c>@key</c> is not a rendering quirk —
+    /// it is an exception that takes the whole form down on the next render.
+    /// </summary>
+    private static object[] KeysFor(List<string> tags)
+    {
+        var keys = new object[tags.Count];
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < tags.Count; i++)
+        {
+            var tag = tags[i];
+            seen[tag] = seen.TryGetValue(tag, out var n) ? n + 1 : 0;
+            keys[i] = seen[tag] == 0 ? tag : (tag, seen[tag]);
+        }
+        return keys;
     }
 
     private string RemoveLabel(string tag) => Context.Text(BlazorFormMessageKeys.TagRemove, tag);

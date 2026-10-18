@@ -21,7 +21,11 @@ public sealed class BlazorFormOptionsContext(
     /// <summary>The absolute path of the field within the form data.</summary>
     public string FieldPath { get; } = fieldPath;
 
-    /// <summary>Read access to the whole form, for options that depend on other values.</summary>
+    /// <summary>
+    /// Read access to the whole form, for options that depend on other values. Paths resolve against
+    /// the object that owns the field before the root, so inside a repeater <c>"Country"</c> is that
+    /// row's country — the same thing the field's <c>dependsOn</c> means.
+    /// </summary>
     public IBlazorFormDataReader Data { get; } = data;
 
     /// <summary>Service provider for resolving whatever the provider needs (HTTP clients, repositories…).</summary>

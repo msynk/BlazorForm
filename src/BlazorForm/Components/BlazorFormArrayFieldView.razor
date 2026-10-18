@@ -1,6 +1,16 @@
 @namespace BlazorForm
+@implements IDisposable
 
-<fieldset class="ff-array" disabled="@Locked" aria-describedby="@DescribedBy">
+@* disabled only when the repeater is disabled, never because it is read-only. A disabled fieldset
+   disables every control inside it, so a read-only repeater — a review screen, a ReadOnlyWhen on a sent
+   invoice — took every row's fields out of the tab order and out of the screen reader's reach, which
+   is precisely what read-only exists not to do. Its row and add buttons are locked one by one instead.
+   The id is what an error-summary link to a message about the list as a whole lands on. *@
+@* tabindex="-1" so a message about the list as a whole — "add at least one line" — has somewhere for
+   the error summary's link, and focus-the-first-error, to put focus: on the group, where the legend and
+   the message are read out together. *@
+<fieldset class="ff-array" id="@ElementId" disabled="@State.IsDisabled(Field, Path)" aria-describedby="@DescribedBy"
+          tabindex="-1" @ref="_fieldset">
     <legend class="ff-array__header">
         <span class="ff-array__title">@Title</span>
         @if (State.IsRequired(Field, Path))
@@ -23,8 +33,9 @@
         <p class="ff-array__empty">@EmptyText</p>
     }
 
-    @* One live region for the whole repeater, announcing the count after add/remove/reorder. Without
-       it a screen-reader user presses "Add" and hears nothing at all. *@
+    @* One live region for the whole repeater, announcing the count after an add or a remove, where the
+       moved row landed after a reorder, and that the list is empty once the last row goes. Without it a
+       screen-reader user presses "Add" and hears nothing at all. *@
     <p class="ff-sr-only" aria-live="polite">@Announcement</p>
 
     @{ var keys = BuildKeys(); }
@@ -37,12 +48,19 @@
         @* A named group, not a bare div. Every row repeats the same labels, so without one a screen
            reader announces "Product, edit" five times over with nothing to say which line is which —
            and the visible row number beside it is decorative. *@
-        <div class="ff-array__item" @key="keys[i]" role="group" aria-label="@State.Text(BlazorFormMessageKeys.ArrayItemGroup, ItemNoun, i + 1)">
+        @* The row's id is what an error-summary link to a message about the row lands on. Only a row of
+           an object has one: a row of a single value is that value's control, which already carries it. *@
+        <div class="ff-array__item" @key="keys[i]" id="@(Template.Type == BlazorFormFieldType.Object ? $"{ElementId}_{i}" : null)" role="group" aria-label="@State.Text(BlazorFormMessageKeys.ArrayItemGroup, ItemNoun, i + 1)"
+             aria-describedby="@RowDescribedBy(itemPath, i)">
             <div class="ff-array__item-body">
                 <span class="ff-array__item-index" aria-hidden="true">@(i + 1)</span>
                 @if (Template.Type == BlazorFormFieldType.Object)
                 {
                     <BlazorFormFieldList State="State" Items="RowItems(itemPath)" />
+                    @* A message about the row as a whole — "this line duplicates line 2" — belongs to none
+                       of its fields. It used to be recorded and never drawn. A row of a single value
+                       needs nothing here: that value's own field shows it. *@
+                    <BlazorFormValidationMessages Messages="State.MessagesFor(itemPath)" Show="RowShowsMessages(itemPath)" Id="@RowErrorId(i)" />
                 }
                 else
                 {
@@ -58,13 +76,14 @@
                 }
                 @if (Reorderable)
                 {
-                    @* aria-disabled, not disabled. A `disabled` button leaves the tab order, so moving a
-                       row to the top would take the focus of the very button that moved it there and
-                       drop it on the page body — mid-reorder, which is exactly when a keyboard user can
-                       least afford to lose their place. The click is guarded instead. *@
-                    <button type="button" class="ff-btn ff-btn--icon" title="@moveUp" aria-label="@moveUp"
+                    @* aria-disabled, not disabled, at the ends. A `disabled` button leaves the tab order,
+                       so moving a row to the top would take the focus of the very button that moved it
+                       there and drop it on the page body — mid-reorder, which is exactly when a keyboard
+                       user can least afford to lose their place. The click is guarded instead. A locked
+                       repeater is different: nothing is moving, so the buttons are plainly disabled. *@
+                    <button type="button" class="ff-btn ff-btn--icon" title="@moveUp" aria-label="@moveUp" disabled="@Locked"
                             aria-disabled="@(i == 0 ? "true" : null)" @onclick="@(() => Move(i, i - 1))">↑</button>
-                    <button type="button" class="ff-btn ff-btn--icon" title="@moveDown" aria-label="@moveDown"
+                    <button type="button" class="ff-btn ff-btn--icon" title="@moveDown" aria-label="@moveDown" disabled="@Locked"
                             aria-disabled="@(i == keys.Length - 1 ? "true" : null)" @onclick="@(() => Move(i, i + 1))">↓</button>
                 }
                 @if (Duplicable)
@@ -119,12 +138,53 @@
 
     /// <summary>
     /// What the live region says. It changes with the count, which is what makes the region announce;
-    /// an identical string would be ignored by every screen reader.
+    /// an identical string would be ignored by every screen reader. A reorder leaves the count where it
+    /// was, and emptying the list leaves nothing to count, so those two say something of their own —
+    /// for as long as the count they were said at still stands.
     /// </summary>
-    private string Announcement => Count == 0 ? "" : State.Text(BlazorFormMessageKeys.ArrayCount, Count, ItemNoun);
+    private string Announcement
+    {
+        get
+        {
+            if (_said is not null && _saidAtCount == Count) return _said;
+            return Count == 0 ? "" : State.Text(BlazorFormMessageKeys.ArrayCount, Count, ItemNoun);
+        }
+    }
 
-    /// <summary>Read-only or conditionally-disabled arrays cannot be edited, added to or reordered.</summary>
-    private bool Locked => State.IsDisabled(Field, Path) || State.IsReadOnly(Field, Path);
+    private string? _said;
+    private int _saidAtCount = -1;
+
+    private const char NonBreakingSpace = (char)0xA0;
+
+    /// <summary>
+    /// Puts <paramref name="text"/> in the live region. A repeat of what is already there is made to
+    /// differ by a trailing non-breaking space, because moving a second row into the same place is news
+    /// too, and an unchanged region is never read out.
+    /// </summary>
+    private void Say(string text)
+    {
+        var current = Announcement;
+        _said = string.Equals(text, current, StringComparison.Ordinal) ? text + NonBreakingSpace : text;
+        _saidAtCount = Count;
+    }
+
+    /// <summary>Whether messages about one row as a whole are showing yet.</summary>
+    private bool RowShowsMessages(string itemPath) => State.IsTouched(itemPath) || State.IsSubmitted;
+
+    /// <summary>Id of a row's own message list — the id a field context for the row's path would give it.</summary>
+    private string RowErrorId(int index) => $"{ElementId}_{index}_error";
+
+    /// <summary>The row group's description: its own messages, when it has any showing.</summary>
+    private string? RowDescribedBy(string itemPath, int index)
+        => Template.Type == BlazorFormFieldType.Object && RowShowsMessages(itemPath) && State.MessagesFor(itemPath).Count > 0
+            ? RowErrorId(index)
+            : null;
+
+    /// <summary>
+    /// Read-only or conditionally-disabled arrays cannot be added to, removed from or reordered. Only a
+    /// disabled one disables its fields as well; a read-only one leaves them to be read.
+    /// </summary>
+    private bool Locked => State.IsDisabled(Field, Path) || _context.IsReadOnly;
 
     private bool CanAdd => !Locked && State.CanAddArrayItem(Field, Path);
 
@@ -136,11 +196,49 @@
     private string ErrorId => ElementId + "_error";
 
     // Derived once per (field, path) rather than per access: it is read several times each render.
-    private string _elementId = "";
-    private string ElementId => _elementId;
+    private BlazorFormFieldContext _context = default!;
+    private string ElementId => _context.ElementId;
 
     protected override void OnParametersSet()
-        => _elementId = new BlazorFormFieldContext(State, Field, Path).ElementId;
+    {
+        if (_context is null || !ReferenceEquals(_context.Field, Field) || _context.Path != Path
+            || !ReferenceEquals(_context.State, State)
+            || _context.IdPrefix != BlazorFormFieldContext.SafePrefix(State.IdPrefix))
+            _context = new BlazorFormFieldContext(State, Field, Path);
+
+        // The list's own path has no control of its own; the group stands in for it (see the fieldset).
+        if (_focusRegistration is null || _registeredPath != Path || !ReferenceEquals(_registeredState, State))
+        {
+            _focusRegistration?.Dispose();
+            _registeredPath = Path;
+            _registeredState = State;
+            _focusRegistration = State.RegisterFocusTarget(Path, FocusGroupAsync);
+        }
+    }
+
+    private ElementReference _fieldset;
+    private IDisposable? _focusRegistration;
+    private string? _registeredPath;
+    private BlazorFormState? _registeredState;
+
+    private async ValueTask<bool> FocusGroupAsync()
+    {
+        try
+        {
+            await _fieldset.FocusAsync();
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JSDisconnectedException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _focusRegistration?.Dispose();
+        _focusRegistration = null;
+    }
 
     private string? DescribedBy
     {
@@ -202,6 +300,7 @@
     {
         var index = State.AddArrayItem(Field, Path);
         if (index >= 0) _focusRow = index;
+        _said = null;
         await Dependents();
     }
 
@@ -220,8 +319,11 @@
     /// </summary>
     private async Task Move(int from, int to)
     {
-        if (to < 0 || to >= Count) return;
+        if (Locked || to < 0 || to >= Count) return;
         State.MoveArrayItem(Path, from, to);
+        // The count has not changed, so on its own the region would say nothing: say where the row
+        // landed instead — the one thing a user who cannot see the list moving needs to know.
+        Say(State.Text(BlazorFormMessageKeys.ArrayItemGroup, ItemNoun, to + 1));
         await Dependents();
     }
 
@@ -229,6 +331,7 @@
     {
         var target = State.DuplicateArrayItem(Field, Path, index);
         if (target >= 0) _focusRow = target;
+        _said = null;
         await Dependents();
     }
 
@@ -237,9 +340,18 @@
         State.RemoveArrayItem(Path, index);
 
         // The row that moved up into the gap is where the user was looking; when the list empties, the
-        // only thing left to aim at is the button that refills it.
-        if (Count == 0) _focusAdd = true;
-        else _focusRow = Math.Min(index, Count - 1);
+        // only thing left to aim at is the button that refills it — and the region, which has no count
+        // left to give, says that the list is now empty rather than falling silent.
+        if (Count == 0)
+        {
+            _focusAdd = true;
+            Say(EmptyText);
+        }
+        else
+        {
+            _focusRow = Math.Min(index, Count - 1);
+            _said = null;
+        }
 
         await Dependents();
     }

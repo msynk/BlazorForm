@@ -292,15 +292,23 @@ public class DictionaryKeyCasingTests
     [Fact]
     public void A_seed_dictionary_holding_two_keys_that_differ_only_in_case_does_not_throw()
     {
-        // The copy constructor would; the store keeps the last one, which is what it would have ended
-        // up with anyway.
-        var data = new BlazorFormDictionaryDataAccessor(new Dictionary<string, object?>
+        // The caller's dictionary is the store itself, so both keys stay where the caller put them: a
+        // path spelled exactly like one of them reads that one, and a write through either spelling
+        // lands on its own entry rather than adding a third.
+        var seed = new Dictionary<string, object?>
         {
             ["email"] = "first",
             ["Email"] = "second"
-        });
+        };
+        var data = new BlazorFormDictionaryDataAccessor(seed);
 
-        Assert.Equal("second", data.GetValue("email"));
+        Assert.Equal("first", data.GetValue("email"));
+        Assert.Equal("second", data.GetValue("Email"));
+
+        data.SetValue("Email", "changed");
+
+        Assert.Equal(2, seed.Count);
+        Assert.Equal("changed", seed["Email"]);
     }
 
     [Fact]

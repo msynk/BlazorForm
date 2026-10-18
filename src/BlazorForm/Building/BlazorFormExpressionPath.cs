@@ -35,6 +35,22 @@ public static class BlazorFormExpressionPath
 
             if (body is MemberExpression member)
             {
+                // `x => x.Age!.Value` on an int? is the property Age, read through Nullable<T>; the
+                // form binds Age itself, and "Age.Value" names nothing the accessor can find.
+                if (member.Member.Name == nameof(Nullable<int>.Value)
+                    && member.Expression?.Type is { } owner && Nullable.GetUnderlyingType(owner) is not null)
+                {
+                    body = member.Expression;
+                    continue;
+                }
+
+                // Data is read and written through properties only, so a field would produce a path
+                // that silently binds to nothing. Refuse it here, where the mistake is visible.
+                if (member.Member is not PropertyInfo)
+                    throw new ArgumentException(
+                        $"Field selector must select properties; '{member.Member.Name}' is a field. " +
+                        "Expose it as a property to bind it.", nameof(selector));
+
                 leaf ??= member.Member;
                 parts.Add(member.Member.Name);
                 body = member.Expression!;

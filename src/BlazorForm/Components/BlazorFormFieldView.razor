@@ -6,6 +6,10 @@
     @if (Field.Type == BlazorFormFieldType.Hidden)
     {
         <DynamicComponent Type="Registry.Resolve(Field)" Parameters="Params" />
+        @* A hidden field has nothing to look at, but a message about it — a server rejecting the record
+           id it carries — still has to be readable somewhere. Without this it blocked the submit with
+           nothing on the page saying why. The list renders nothing at all while there is nothing to say. *@
+        <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" Id="@Context.ErrorId" />
     }
     else if (Field.Type == BlazorFormFieldType.Static)
     {
@@ -17,10 +21,12 @@
     }
     else if (Field.Type == BlazorFormFieldType.Object)
     {
-        @* aria-describedby, so the group's explanation is announced when focus enters it. Rendering the
-           help text without pointing at it leaves it visible but silent. *@
-        <fieldset class="ff-group" style="@GridStyle" disabled="@State.IsDisabled(Field, Path)"
-                  aria-describedby="@(string.IsNullOrEmpty(Field.HelpText) ? null : Context.HelpId)">
+        @* aria-describedby, so the group's explanation — and anything wrong with the group as a whole —
+           is announced when focus enters it. Rendering the help text without pointing at it leaves it
+           visible but silent. The id is what an error-summary link to the group lands on. *@
+        <fieldset class="ff-group @(Context.HasError && Context.ShowMessages ? "ff-group--invalid" : "")"
+                  id="@Context.ElementId" style="@GridStyle" disabled="@State.IsDisabled(Field, Path)"
+                  aria-describedby="@Context.DescribedBy">
             @if (!string.IsNullOrEmpty(Field.Label))
             {
                 <legend class="ff-group__legend">@Field.Label</legend>
@@ -29,6 +35,10 @@
             {
                 <p class="ff-help" id="@Context.HelpId">@Field.HelpText</p>
             }
+            @* A message about the object as a whole — "this address cannot be delivered to", from a server
+               or a model-level validator — belongs to no single child. It used to be recorded and never
+               drawn: the submit failed and nothing on the page said why. *@
+            <BlazorFormValidationMessages Messages="Context.Messages" Show="Context.ShowMessages" Id="@Context.ErrorId" />
             <div class="ff-group__body @(ChildColumns > 1 ? "ff-grid" : "")" style="@ChildGridStyle">
                 <BlazorFormFieldList State="State" Items="ChildItems" />
             </div>
@@ -110,8 +120,11 @@
 
     protected override void OnParametersSet()
     {
+        // The id prefix is part of what the context derived, so a form given a new one rebuilds its
+        // contexts rather than leaving labels pointing at ids that no longer exist.
         if (_context is not null && ReferenceEquals(_context.Field, Field) && _context.Path == Path
-            && ReferenceEquals(_context.State, State))
+            && ReferenceEquals(_context.State, State)
+            && _context.IdPrefix == BlazorFormFieldContext.SafePrefix(State.IdPrefix))
             return;
 
         var isFirstContext = _context is null;
@@ -165,7 +178,7 @@
     private RenderSignature Capture() => new(
         State.IsVisible(Field, Path),
         State.IsDisabled(Field, Path),
-        State.IsReadOnly(Field, Path),
+        Context.IsReadOnly,
         State.IsRequired(Field, Path),
         Context.ShowMessages,
         Context.Value,
@@ -173,6 +186,12 @@
         State.IsLoadingOptions(Path),
         Context.OptionsFailed,
         Context.Options.Count,
+        // Only for a field whose choices are loaded. The count alone cannot see a cache that was
+        // dropped and needs fetching again when the list it replaced was empty too — a city list that
+        // is empty until a country is chosen looked unchanged when the country arrived, so the select
+        // never re-rendered and never asked for its cities. The version moves on every load, landing
+        // and invalidation, which is what makes the control ask.
+        Field.OptionsProvider is null ? 0 : State.OptionsVersion,
         Context.IsValidating);
 
     /// <summary>
@@ -190,6 +209,7 @@
         bool LoadingOptions,
         bool OptionsFailed,
         int OptionCount,
+        int OptionsVersion,
         bool Validating)
     {
         public bool Equals(RenderSignature other)
@@ -201,6 +221,7 @@
                && LoadingOptions == other.LoadingOptions
                && OptionsFailed == other.OptionsFailed
                && OptionCount == other.OptionCount
+               && OptionsVersion == other.OptionsVersion
                && Validating == other.Validating
                && ReferenceEquals(Messages, other.Messages)
                && ValuesMatch(Value, other.Value);

@@ -23,6 +23,11 @@
     color: var(--ff-text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     max-width: var(--ff-max-width);
+    /* Declared alongside the tokens in every theme below. The browser draws the parts of a control the
+       stylesheet cannot reach — the date picker and its calendar icon, a select's open list, the file
+       button, scrollbars — from color-scheme, not from our colours, so without it the dark theme put a
+       black calendar icon on a near-black box and opened white dropdowns over it. */
+    color-scheme: light;
 }
 
 /* Follows the OS setting unless the host app has already themed the form. An app with its own theme
@@ -30,6 +35,7 @@
    query because it is a more specific selector — so "dark site, light OS" comes out dark. */
 @media (prefers-color-scheme: dark) {
     .ff-form {
+        color-scheme: dark;
         --ff-surface: #111827;
         --ff-surface-muted: #1f2937;
         --ff-surface-disabled: #374151;
@@ -43,6 +49,7 @@
 }
 
 [data-theme="dark"] .ff-form, .ff-form[data-theme="dark"] {
+    color-scheme: dark;
     --ff-surface: #111827;
     --ff-surface-muted: #1f2937;
     --ff-surface-disabled: #374151;
@@ -55,6 +62,7 @@
 }
 
 [data-theme="light"] .ff-form, .ff-form[data-theme="light"] {
+    color-scheme: light;
     --ff-surface: #ffffff;
     --ff-surface-muted: #fafafa;
     --ff-surface-disabled: #f3f4f6;
@@ -115,7 +123,10 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ff-accent) 20%, transparent);
 }
 .ff-input:disabled { background: var(--ff-surface-disabled); color: var(--ff-muted); cursor: not-allowed; }
-.ff-input:read-only:not(:disabled) { background: var(--ff-surface-muted); }
+/* [readonly], not :read-only. The pseudo-class matches every control the readonly attribute cannot
+   apply to — every <select>, every file and colour input — so each editable one of those was painted as
+   if it were locked. */
+.ff-input[readonly]:not(:disabled) { background: var(--ff-surface-muted); }
 .ff-input--invalid { border-color: var(--ff-error); }
 .ff-field--invalid .ff-label { color: var(--ff-error); }
 
@@ -259,6 +270,8 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 .ff-group__legend { font-weight: 600; padding: 0 .4rem; }
 .ff-group__body { display: flex; flex-direction: column; gap: var(--ff-gap); }
 .ff-group[disabled] { opacity: .6; }
+/* A message about the object as a whole — not about any one field in it — marks the group itself. */
+.ff-group--invalid { border-color: var(--ff-error); }
 
 /* Named field groups: a run of sibling fields sharing a Group name, or [Display(GroupName = …)]. Flatter
    than the nested-object fieldset, because a group is a visual cluster rather than a level of the data. */
@@ -369,5 +382,5 @@ textarea.ff-input { resize: vertical; min-height: 4.5rem; }
 
     /* Borders survive forced colours where backgrounds do not, so the field that needs attention is
        still distinguishable from the ones that do not. */
-    .ff-input--invalid, .ff-affixed--invalid, .ff-tags--invalid { border-style: dashed; border-width: 2px; }
+    .ff-input--invalid, .ff-affixed--invalid, .ff-tags--invalid, .ff-group--invalid { border-style: dashed; border-width: 2px; }
 }

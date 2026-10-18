@@ -45,6 +45,14 @@ public static class BlazorFormEnumOptions
     }
 
     /// <summary>
+    /// Whether <paramref name="value"/> is a <c>[Flags]</c> value with no flag set — a multi-select with
+    /// nothing ticked. The zero member is left out of the options above, so it is never an answer.
+    /// </summary>
+    internal static bool IsEmptyFlags(Enum value)
+        => value.GetType().IsDefined(typeof(FlagsAttribute), inherit: false)
+           && value.Equals(Enum.ToObject(value.GetType(), 0));
+
+    /// <summary>
     /// Widens an enum's raw constant (which may be any integral type, signed or not) to a long so the
     /// zero member can be recognised.
     /// </summary>

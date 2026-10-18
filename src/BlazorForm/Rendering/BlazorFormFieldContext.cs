@@ -13,8 +13,15 @@ public sealed class BlazorFormFieldContext
         State = state;
         Field = field;
         Path = path;
-        ElementId = MakeElementId(path);
+        IdPrefix = SafePrefix(state.IdPrefix);
+        ElementId = MakeElementId(IdPrefix, path);
     }
+
+    /// <summary>
+    /// The id-safe form of <see cref="BlazorFormState.IdPrefix"/> this context's ids were derived from.
+    /// Kept so a view holding on to a context can tell that the prefix has moved since it was built.
+    /// </summary>
+    internal string IdPrefix { get; }
 
     public BlazorFormState State { get; }
     public BlazorFormFieldDefinition Field { get; }
@@ -37,8 +44,40 @@ public sealed class BlazorFormFieldContext
     /// <summary>Whether the field is disabled by a condition.</summary>
     public bool IsDisabled => State.IsDisabled(Field, Path);
 
-    /// <summary>Whether the field is read-only.</summary>
-    public bool IsReadOnly => State.IsReadOnly(Field, Path);
+    /// <summary>
+    /// Whether the field is read-only — in its own right, because the whole form is, or because an
+    /// object or repeater it sits inside is.
+    /// </summary>
+    /// <remarks>
+    /// The containers count because a read-only repeater used to be rendered as a <em>disabled</em>
+    /// fieldset, which locked its rows by disabling every control in them — out of the tab order and
+    /// unreadable, the opposite of what read-only promises. The fieldset now disables only for
+    /// disabled, so the rows have to learn that they are read-only from here instead.
+    /// </remarks>
+    public bool IsReadOnly => State.IsReadOnly(Field, Path) || InsideReadOnlyContainer();
+
+    private (BlazorFormFieldDefinition Field, string Path)[]? _containers;
+
+    private bool InsideReadOnlyContainer()
+    {
+        // Resolved once: the field and path a context describes never change, and this is read on
+        // every render of every field.
+        _containers ??= FindContainers();
+        foreach (var (field, path) in _containers)
+            if (State.IsReadOnly(field, path)) return true;
+        return false;
+    }
+
+    private (BlazorFormFieldDefinition Field, string Path)[] FindContainers()
+    {
+        List<(BlazorFormFieldDefinition, string)>? found = null;
+        for (var path = BlazorFormPath.Parent(Path); path.Length > 0; path = BlazorFormPath.Parent(path))
+        {
+            if (State.Definition.FindByPath(path) is { IsContainer: true } container)
+                (found ??= []).Add((container, path));
+        }
+        return found?.ToArray() ?? [];
+    }
 
     /// <summary>Whether the field is required right now (including <see cref="BlazorFormFieldDefinition.RequiredWhen"/>).</summary>
     public bool IsRequired => State.IsRequired(Field, Path);
@@ -149,7 +188,9 @@ public sealed class BlazorFormFieldContext
     /// </param>
     public async Task SetFromStringAsync(string? raw, bool includeAsync = false)
     {
-        var parsed = BlazorFormValueConverter.FromInputString(raw, Field.ValueType, Field.Type);
+        // The current value goes along so a timestamp keeps the offset it had: the input shows only
+        // its clock time, and the offset is what makes the round trip land on the same instant.
+        var parsed = BlazorFormValueConverter.FromInputString(raw, Field.ValueType, Field.Type, Value);
         State.SetValue(Path, parsed);
         if (State.ShouldValidate(Path, BlazorFormValidationTrigger.OnChange))
             await State.ValidateFieldAsync(Field, Path, includeAsync);
@@ -210,17 +251,49 @@ public sealed class BlazorFormFieldContext
     }
 
     /// <summary>
-    /// Turns a data path into an id that is valid in HTML and safe in a CSS selector:
-    /// <c>Items[0].Product</c> becomes <c>ff_Items_0_Product</c>.
+    /// An id for something that belongs to the form as a whole rather than to one field — the list of
+    /// form-level messages, say — carrying the same prefix as every field id, so two forms on one page
+    /// keep theirs apart too.
     /// </summary>
-    private static string MakeElementId(string path)
+    internal static string FormElementId(BlazorFormState state, string name) => SafePrefix(state.IdPrefix) + name;
+
+    /// <summary>
+    /// Turns a data path into an id that is valid in HTML and safe in a CSS selector:
+    /// <c>Items[0].Product</c> becomes <c>ff_Items_0_Product</c> under the default prefix.
+    /// </summary>
+    private static string MakeElementId(string prefix, string path)
     {
-        var sb = new StringBuilder(path.Length + 3).Append("ff_");
+        var sb = new StringBuilder(prefix.Length + path.Length).Append(prefix);
         foreach (var c in path)
         {
             if (c == ']') continue; // the opening bracket already became the separator
             sb.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
         }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The prefix folded to characters that are safe in an id, a URL fragment and a CSS selector alike.
+    /// The prefix is the application's to choose, and one containing a space or a <c>#</c> would
+    /// otherwise produce ids that a <c>&lt;label for&gt;</c> or an error-summary link can never match.
+    /// </summary>
+    internal static string SafePrefix(string? prefix)
+    {
+        if (string.IsNullOrEmpty(prefix)) return "ff_";
+
+        // A selector cannot start with a digit (or a hyphen and a digit) without escaping, so such a
+        // prefix is given a letter to lead with.
+        var leadsBadly = char.IsDigit(prefix[0]) || (prefix[0] == '-' && (prefix.Length == 1 || char.IsDigit(prefix[1])));
+
+        var safe = !leadsBadly;
+        foreach (var c in prefix)
+            if (!char.IsLetterOrDigit(c) && c is not ('_' or '-')) { safe = false; break; }
+        if (safe) return prefix;
+
+        var sb = new StringBuilder(prefix.Length + 1);
+        if (leadsBadly) sb.Append('f');
+        foreach (var c in prefix)
+            sb.Append(char.IsLetterOrDigit(c) || c is '_' or '-' ? c : '_');
         return sb.ToString();
     }
 }

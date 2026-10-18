@@ -38,13 +38,16 @@ public class FileTypeResolutionTests
     }
 
     [Fact]
-    public void Byte_arrays_and_streams_are_uploads_too()
+    public void Byte_arrays_and_streams_are_left_out_rather_than_given_a_picker_that_refuses_every_file()
     {
+        // A file input produces an IBrowserFile, which cannot be written into a byte[] or a Stream, so
+        // the file field these used to generate rejected every selection as "not a valid value".
         var form = BlazorFormSchemaGenerator.Generate<UploadModel>();
 
-        Assert.Equal(BlazorFormFieldType.File, form.FindField("Thumbnail")!.Type);
-        Assert.False(form.FindField("Thumbnail")!.Multiple);
-        Assert.Equal(BlazorFormFieldType.File, form.FindField("Archive")!.Type);
+        Assert.Null(form.FindField("Thumbnail"));
+        Assert.Null(form.FindField("Archive"));
+        Assert.NotEqual(BlazorFormFieldType.File, BlazorFormFieldTypeResolver.Resolve(typeof(byte[])));
+        Assert.NotEqual(BlazorFormFieldType.File, BlazorFormFieldTypeResolver.Resolve(typeof(Stream)));
     }
 
     [Fact]

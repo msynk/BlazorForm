@@ -204,9 +204,10 @@ public class ValidationRenderingTests : ComponentTestBase
 
         var links = cut.FindAll(".ff-summary__list a");
         Assert.Equal(2, links.Count);
-        Assert.Equal("#ff_first", links[0].GetAttribute("href"));
+        // Built on this page's own address: a bare "#ff_first" resolves against <base href>, not the page.
+        Assert.Equal("http://localhost/#ff_first", links[0].GetAttribute("href"));
         Assert.Contains("First:", links[0].TextContent, StringComparison.Ordinal);
-        Assert.Equal("#ff_second", links[1].GetAttribute("href"));
+        Assert.Equal("http://localhost/#ff_second", links[1].GetAttribute("href"));
 
         // The summary takes focus itself, so it must NOT also be a live region: a screen reader would
         // announce it once for the region changing and again for focus arriving.

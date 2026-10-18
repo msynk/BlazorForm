@@ -32,6 +32,14 @@ public sealed class BlazorFormValidationContext
     /// <summary>The definition of the field being validated, when the caller supplied it.</summary>
     public BlazorFormFieldDefinition? Field { get; }
 
+    /// <summary>
+    /// Signalled when this validation run has been superseded — the user typed again, pressed Next a
+    /// second time, or the form was reset or disposed. An async rule should pass it on to the remote
+    /// call it makes, so a lookup nobody is waiting for any more stops costing anything; its answer
+    /// is discarded either way.
+    /// </summary>
+    public CancellationToken CancellationToken { get; init; }
+
     /// <summary>The field's label, falling back to its path — for messages that need to name the field.</summary>
     public string DisplayName => Field?.Label ?? FieldPath;
 

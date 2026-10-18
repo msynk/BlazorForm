@@ -83,7 +83,11 @@ public class ConditionalReadOnlyTests : ComponentTestBase
         state.SetValue("sent", true);
         var cut = Render<BlazorFormView>(p => p.Add(x => x.State, state));
 
-        Assert.True(cut.Find("fieldset.ff-array").HasAttribute("disabled"));
+        // The buttons are locked one by one. The fieldset itself is not disabled: that would disable the
+        // rows' fields too, taking a read-only answer out of the tab order and out of a screen reader's
+        // reach — the very thing read-only exists not to do.
+        Assert.False(cut.Find("fieldset.ff-array").HasAttribute("disabled"));
+        Assert.True(cut.Find(".ff-btn--add").HasAttribute("disabled"));
     }
 
     [Fact]

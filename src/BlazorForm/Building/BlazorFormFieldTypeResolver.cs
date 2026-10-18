@@ -32,15 +32,22 @@ public static class BlazorFormFieldTypeResolver
         // Types that are technically classes/collections but that users always mean as a single value.
         if (t == typeof(Guid)) return BlazorFormFieldType.Text;
         if (t == typeof(Uri)) return BlazorFormFieldType.Url;
-        if (t == typeof(byte[])) return BlazorFormFieldType.File;
+
+        // Raw content — bytes or a stream — is something no control can produce: the file input hands
+        // over an IBrowserFile, which has to be read asynchronously, and converting one to a byte[] on
+        // the way into the model is not something a synchronous write can do. Mapped to File, such a
+        // property rendered a picker whose every selection was refused as "not a valid value"; mapped
+        // to nothing, a byte[] would fall through to a repeater of numbers. It is Custom instead: the
+        // schema diagnostics flag it, and a renderer that knows how to fill it can be attached. The
+        // generator leaves such properties out altogether (see IsBinaryContent).
+        if (IsBinaryContent(t)) return BlazorFormFieldType.Custom;
 
         // A browser file is an upload, not a group of properties to edit. Without this it falls through
         // to the bottom of the method and generates a text box, which is unusable and silently so.
         if (IsBrowserFile(t)) return BlazorFormFieldType.File;
-        if (typeof(Stream).IsAssignableFrom(t)) return BlazorFormFieldType.File;
 
         // A collection of files is one multi-file upload, not a repeater of file fields.
-        if (GetEnumerableElementType(t) is { } element && (IsBrowserFile(element) || element == typeof(byte[])))
+        if (GetEnumerableElementType(t) is { } element && IsBrowserFile(element))
             return BlazorFormFieldType.File;
 
         // A collection of enum members is a closed set of choices, so it is one multi-select rather
@@ -58,8 +65,20 @@ public static class BlazorFormFieldTypeResolver
     }
 
     /// <summary>Whether a type is, or implements, Blazor's <c>IBrowserFile</c>.</summary>
-    private static bool IsBrowserFile(Type type)
+    internal static bool IsBrowserFile(Type type)
         => typeof(Microsoft.AspNetCore.Components.Forms.IBrowserFile).IsAssignableFrom(type);
+
+    /// <summary>
+    /// Whether a type holds raw content — a <c>byte[]</c>, a <see cref="Stream"/>, or a collection of
+    /// either — which no built-in control can produce.
+    /// </summary>
+    internal static bool IsBinaryContent(Type type)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        if (t == typeof(byte[]) || typeof(Stream).IsAssignableFrom(t)) return true;
+        return GetEnumerableElementType(t) is { } element
+               && (element == typeof(byte[]) || typeof(Stream).IsAssignableFrom(element));
+    }
 
     /// <summary>
     /// The enum type a collection holds, or null when <paramref name="type"/> is not a collection of

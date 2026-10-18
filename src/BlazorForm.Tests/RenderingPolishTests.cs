@@ -204,6 +204,11 @@ public class SubmitOutcomeAnnouncementTests : ComponentTestBase
         .Text("a", f => f.Required())
         .Build();
 
+    // The status region is always in the page — a live region inserted together with its text is not
+    // reliably read out — so "says nothing" means it is empty, not that it is absent.
+    private static string Said(IRenderedComponent<BlazorFormView> cut)
+        => string.Concat(cut.FindAll("[role=status]").Select(e => e.TextContent)).Trim();
+
     [Fact]
     public void With_no_summary_and_no_error_focus_the_outcome_is_announced()
     {
@@ -227,7 +232,7 @@ public class SubmitOutcomeAnnouncementTests : ComponentTestBase
 
         cut.Find("form").Submit();
 
-        Assert.Empty(cut.FindAll("[role=status]"));
+        Assert.Equal(string.Empty, Said(cut));
     }
 
     [Fact]
@@ -237,7 +242,7 @@ public class SubmitOutcomeAnnouncementTests : ComponentTestBase
 
         cut.Find("form").Submit();
 
-        Assert.Empty(cut.FindAll("[role=status]"));
+        Assert.Equal(string.Empty, Said(cut));
     }
 
     [Fact]
@@ -247,6 +252,6 @@ public class SubmitOutcomeAnnouncementTests : ComponentTestBase
             .Add(x => x.Definition, Schema())
             .Add(x => x.FocusFirstError, false));
 
-        Assert.Empty(cut.FindAll("[role=status]"));
+        Assert.Equal(string.Empty, Said(cut));
     }
 }

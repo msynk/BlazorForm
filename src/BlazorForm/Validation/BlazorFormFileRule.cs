@@ -5,7 +5,8 @@ namespace BlazorForm;
 /// <summary>
 /// Validates the files chosen for a <see cref="BlazorFormFieldType.File"/> field. The browser's
 /// <c>accept</c> attribute is only a filter in the file picker — a user can still drag in or select
-/// anything — so size and extension are checked again here.
+/// anything — so size and extension are checked again here. On a text value it checks the extension
+/// of the file name the text holds, which is what <c>[FileExtensions]</c> on a string property means.
 /// </summary>
 public sealed class BlazorFormFileRule(long? maxSizeBytes = null, string? accept = null, string? message = null)
     : IBlazorFormValidationRule
@@ -17,6 +18,17 @@ public sealed class BlazorFormFileRule(long? maxSizeBytes = null, string? accept
 
     public ValueTask<BlazorFormRuleResult> ValidateAsync(BlazorFormValidationContext ctx)
     {
+        // A file *name* — what [FileExtensions] checks on a string property — has no size and no media
+        // type, so only the extensions in the accept list can be held against it.
+        if (ctx.Value is string name)
+        {
+            var extensions = _accept.Where(t => t.StartsWith('.')).ToArray();
+            if (name.Length == 0 || extensions.Length == 0
+                || extensions.Any(e => name.EndsWith(e, StringComparison.OrdinalIgnoreCase)))
+                return new(BlazorFormRuleResult.Success());
+            return new(BlazorFormRuleResult.Fail(message ?? ctx.Message(BlazorFormMessageKeys.FileType, string.Join(", ", extensions))));
+        }
+
         foreach (var file in Enumerate(ctx.Value))
         {
             if (maxSizeBytes is { } max && file.Size > max)

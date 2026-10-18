@@ -23,7 +23,9 @@
             <code>[Display(GroupName = "…")]</code> — or <code>f.Group("…")</code> — clusters a run of
             fields into one labelled fieldset.
         </p>
-        <BlazorFormView State="_grouped" ShowSubmitButton="false" />
+        @* The same schema is rendered twice on this page, so each copy gets an id prefix of its own —
+           otherwise both would render ff_ReporterName, and a label in one would point at the other. *@
+        <BlazorFormView State="_grouped" ShowSubmitButton="false" IdPrefix="grouped_" />
     </div>
 
     <div class="demo-card">
@@ -142,7 +144,7 @@ state.OptionsLoadFailed += (path, ex) => logger.LogWarning(ex, "Options for {Pat
     protected override void OnInitialized()
     {
         _grouped = new BlazorFormState(Schema(), new BlazorFormModelDataAccessor(_groupedModel));
-        _custom = new BlazorFormState(Schema(), new BlazorFormModelDataAccessor(_customModel));
+        _custom = new BlazorFormState(Schema(), new BlazorFormModelDataAccessor(_customModel)) { IdPrefix = "custom_" };
 
         _grouped.StateChanged += OnStateChanged;
         _custom.StateChanged += OnStateChanged;

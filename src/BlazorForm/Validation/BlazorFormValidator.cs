@@ -45,7 +45,10 @@ public sealed class BlazorFormValidator
             {
                 if (rule.IsAsync && !includeAsync) continue;
                 cancellationToken.ThrowIfCancellationRequested();
-                var ctx = new BlazorFormValidationContext(string.Empty, data.Root, data, services);
+                var ctx = new BlazorFormValidationContext(string.Empty, data.Root, data, services)
+                {
+                    CancellationToken = cancellationToken
+                };
                 var result = await rule.ValidateAsync(ctx);
                 if (!result.IsValid && result.Message is not null)
                     messages.Add(new BlazorFormValidationMessage(result.FieldPath ?? string.Empty, result.Message, result.Severity));
@@ -92,7 +95,10 @@ public sealed class BlazorFormValidator
             return;
 
         var value = data.GetValue(path);
-        var ctx = new BlazorFormValidationContext(path, value, scoped, services, field);
+        var ctx = new BlazorFormValidationContext(path, value, scoped, services, field)
+        {
+            CancellationToken = cancellationToken
+        };
 
         // Conditional requiredness is evaluated before the declared rules so its message leads.
         if (field.RequiredWhen is not null && field.RequiredWhen.Evaluate(scoped) && !field.Required)

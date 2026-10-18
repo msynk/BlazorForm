@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
 namespace BlazorForm;
@@ -65,7 +66,7 @@ public static class BlazorFormDataAnnotationsIntegration
             var context = new ValidationContext(model, services, items: null);
 
             if (includePropertyAttributes)
-                Validator.TryValidateObject(model, context, results, validateAllProperties: true);
+                ValidateAttributes(model, context, services, results);
 
             if (model is IValidatableObject validatable)
                 results.AddRange(validatable.Validate(context).Where(r => r != ValidationResult.Success));
@@ -73,6 +74,44 @@ public static class BlazorFormDataAnnotationsIntegration
             return new ValueTask<IReadOnlyList<BlazorFormValidationMessage>>(Map(results));
         });
         return state;
+    }
+
+    /// <summary>
+    /// The attribute half of <see cref="Validator.TryValidateObject(object, ValidationContext, ICollection{ValidationResult}, bool)"/>:
+    /// every property's <see cref="ValidationAttribute"/>s, then the type's own.
+    /// </summary>
+    /// <remarks>
+    /// <c>TryValidateObject</c> itself cannot be used for this. It calls
+    /// <see cref="IValidatableObject.Validate"/> too — when every attribute passed — and its result
+    /// cannot say whether it did, since it is false both when an attribute failed and when
+    /// <c>Validate</c> did. Calling it and then <c>Validate</c> ran the model's own validation twice on
+    /// every valid model, doubling whatever it costs (a database lookup included); validating the
+    /// attributes here leaves exactly one call, made by <see cref="UseDataAnnotations"/>.
+    /// <para>
+    /// The class-level attributes keep DataAnnotations' own short-circuit: they run only once every
+    /// property attribute has passed. A class-level <c>[CustomValidation]</c> is written on that
+    /// assumption — it reads members a <c>[Required]</c> has already vouched for — and run regardless,
+    /// it dereferenced the very null the property attribute had just reported, throwing out of the
+    /// validation pass.
+    /// </para>
+    /// </remarks>
+    private static void ValidateAttributes(object model, ValidationContext context, IServiceProvider? services,
+        List<ValidationResult> results)
+    {
+        var before = results.Count;
+
+        foreach (PropertyDescriptor property in TypeDescriptor.GetProperties(model))
+        {
+            if (!property.Attributes.OfType<ValidationAttribute>().Any()) continue;
+
+            var propertyContext = new ValidationContext(model, services, items: null) { MemberName = property.Name };
+            Validator.TryValidateProperty(property.GetValue(model), propertyContext, results);
+        }
+
+        if (results.Count != before) return;
+
+        Validator.TryValidateValue(model, context, results,
+            TypeDescriptor.GetAttributes(model).OfType<ValidationAttribute>());
     }
 
     private static IReadOnlyList<BlazorFormValidationMessage> Map(List<ValidationResult> results)

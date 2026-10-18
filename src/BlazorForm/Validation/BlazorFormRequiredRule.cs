@@ -17,6 +17,10 @@ public sealed class BlazorFormRequiredRule(string? message = null) : IBlazorForm
             // A required checkbox means "you must tick this" — the semantics of HTML's own `required`
             // on a checkbox, and what "I accept the terms" always needs. Elsewhere `false` is a value.
             bool b => !b && ctx.Field?.Type == BlazorFormFieldType.Checkbox,
+            // A [Flags] value is a set of choices, and with nothing ticked it is the empty set — the
+            // same answer an empty List<TEnum> gives, which already failed here. Its zero member is
+            // never offered as a choice (see BlazorFormEnumOptions), so it cannot be a deliberate one.
+            Enum e => BlazorFormEnumOptions.IsEmptyFlags(e),
             ICollection c => c.Count == 0,
             IEnumerable e and not string => !e.Cast<object?>().Any(),
             _ => false

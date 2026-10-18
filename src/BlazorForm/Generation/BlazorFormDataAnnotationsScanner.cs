@@ -1,5 +1,7 @@
+using System.Collections;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Reflection;
 
 namespace BlazorForm;
@@ -60,9 +62,14 @@ public static class BlazorFormDataAnnotationsScanner
         // [MinLength]/[MaxLength] mean item counts on a collection, exactly as [Length] does. Mapping
         // them to the string rule on an array field made them silently do nothing: the rule reads
         // ctx.Value as a string, a List<T> is not one, and "at least one line" passed on an empty list.
+        // What decides it is the member's CLR type, as it does for DataAnnotations — not the control:
+        // a List<DayOfWeek> renders as a multi-select and a List<IBrowserFile> as a file picker, and
+        // "pick at least one" was dropped on both because neither is an Array field.
+        var isCollection = IsCollection(MemberType(member)) || field.Type == BlazorFormFieldType.Array;
+
         if (member.GetCustomAttribute<MinLengthAttribute>() is { } ml)
         {
-            if (field.Type == BlazorFormFieldType.Array)
+            if (isCollection)
             {
                 field.MinItems = ml.Length;
                 field.AddValidator(new BlazorFormCollectionSizeRule(ml.Length, field.MaxItems, NullIfDefault(ml.ErrorMessage)));
@@ -76,7 +83,7 @@ public static class BlazorFormDataAnnotationsScanner
 
         if (member.GetCustomAttribute<MaxLengthAttribute>() is { } mxl)
         {
-            if (field.Type == BlazorFormFieldType.Array)
+            if (isCollection)
             {
                 field.MaxItems = mxl.Length;
                 field.AddValidator(new BlazorFormCollectionSizeRule(field.MinItems, mxl.Length, NullIfDefault(mxl.ErrorMessage)));
@@ -91,7 +98,7 @@ public static class BlazorFormDataAnnotationsScanner
         // [Length(min, max)] covers both bounds, and applies to collections as well as strings.
         if (member.GetCustomAttribute<LengthAttribute>() is { } len)
         {
-            if (field.Type == BlazorFormFieldType.Array)
+            if (isCollection)
             {
                 field.MinItems = len.MinimumLength;
                 field.MaxItems = len.MaximumLength;
@@ -106,14 +113,19 @@ public static class BlazorFormDataAnnotationsScanner
             }
         }
 
-        // Range
+        // Range. Exclusive ends are carried as the rule's own flags; the min/max attributes the input
+        // renders stay inclusive, which is the most HTML can say, and the rule refuses the bound itself.
         if (member.GetCustomAttribute<RangeAttribute>() is { } range)
         {
-            double? min = TryToDouble(range.Minimum);
-            double? max = TryToDouble(range.Maximum);
+            double? min = ToBound(range, range.Minimum);
+            double? max = ToBound(range, range.Maximum);
             field.Min = min;
             field.Max = max;
-            field.AddValidator(new BlazorFormRangeRule(min, max, NullIfDefault(range.ErrorMessage)));
+            field.AddValidator(new BlazorFormRangeRule(min, max, NullIfDefault(range.ErrorMessage))
+            {
+                MinExclusive = range.MinimumIsExclusive,
+                MaxExclusive = range.MaximumIsExclusive
+            });
         }
 
         // Email / phone / url
@@ -131,14 +143,24 @@ public static class BlazorFormDataAnnotationsScanner
         if (member.GetCustomAttribute<UrlAttribute>() is { } url)
         {
             field.Type = BlazorFormFieldType.Url;
-            field.AddValidator(new BlazorFormUrlRule(NullIfDefault(url.ErrorMessage)));
+            // The schemes [Url] itself accepts. The rule's default is http and https only, so an ftp://
+            // address the model's own validation was happy with was refused by the form in front of it.
+            field.AddValidator(new BlazorFormUrlRule(NullIfDefault(url.ErrorMessage),
+                Uri.UriSchemeHttp, Uri.UriSchemeHttps, Uri.UriSchemeFtp));
         }
 
-        // Regex
+        // Regex. [RegularExpression] matches the whole value — DataAnnotations checks that the match
+        // starts at the first character and ends at the last — while a pattern rule, like JSON Schema's
+        // `pattern`, matches anywhere. Copied across as it stood, [RegularExpression(@"\d{5}")] accepted
+        // "abc12345xyz", which the model's own validation then rejected. Anchoring the pattern keeps
+        // the attribute's meaning; the group keeps an alternation inside it ("a|b") from being anchored
+        // at one end only. The rule ends at \z, because in .NET `$` also matches before a final newline
+        // and "12345\n" would pass; the input's `pattern` keeps `$`, which is what the browser's (and
+        // JSON Schema's) dialect understands — \z is not part of it.
         if (member.GetCustomAttribute<RegularExpressionAttribute>() is { } rx)
         {
-            field.Pattern = rx.Pattern;
-            field.AddValidator(new BlazorFormPatternRule(rx.Pattern, NullIfDefault(rx.ErrorMessage)));
+            field.Pattern = $"^(?:{rx.Pattern})$";
+            field.AddValidator(new BlazorFormPatternRule($@"^(?:{rx.Pattern})\z", NullIfDefault(rx.ErrorMessage)));
         }
 
         // [Compare] names a sibling property, which is exactly a form path at the same level.
@@ -166,21 +188,35 @@ public static class BlazorFormDataAnnotationsScanner
                 DataType.Date => BlazorFormFieldType.Date,
                 DataType.Time => BlazorFormFieldType.Time,
                 DataType.DateTime => BlazorFormFieldType.DateTime,
-                DataType.Upload => BlazorFormFieldType.File,
+                // Only a member that can hold what a file input produces becomes one.
+                DataType.Upload when IsFileMember(MemberType(member)) => BlazorFormFieldType.File,
                 _ => field.Type
             };
 
             if (dt.DataType == DataType.Password) field.Autocomplete ??= "current-password";
         }
 
-        // Uploads
+        // Uploads. [FileExtensions] is, first of all, a check on a *file name* — DataAnnotations
+        // validates a string with it, and that is where MVC models put it. Turning such a property into
+        // a file picker bound it to a string no IBrowserFile could be written to, so every selection was
+        // refused. A file-typed member becomes a picker with an accept list; anything else keeps its
+        // control and has the name it holds checked against the same extensions.
         if (member.GetCustomAttribute<FileExtensionsAttribute>() is { } fx && !string.IsNullOrWhiteSpace(fx.Extensions))
         {
-            field.Type = BlazorFormFieldType.File;
-            field.Accept = string.Join(",", fx.Extensions
+            var accept = string.Join(",", fx.Extensions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(e => e.StartsWith('.') ? e : "." + e));
-            field.AddValidator(new BlazorFormFileRule(field.MaxFileSize, field.Accept, NullIfDefault(fx.ErrorMessage)));
+
+            if (IsFileMember(MemberType(member)))
+            {
+                field.Type = BlazorFormFieldType.File;
+                field.Accept = accept;
+                field.AddValidator(new BlazorFormFileRule(field.MaxFileSize, accept, NullIfDefault(fx.ErrorMessage)));
+            }
+            else
+            {
+                field.AddValidator(new BlazorFormFileRule(null, accept, NullIfDefault(fx.ErrorMessage)));
+            }
         }
 
         // Editable(false) => read only
@@ -190,14 +226,67 @@ public static class BlazorFormDataAnnotationsScanner
 
     private static string? NullIfDefault(string? message) => string.IsNullOrWhiteSpace(message) ? null : message;
 
-    private static double? TryToDouble(object? value)
+    private static Type? MemberType(MemberInfo member) => member switch
+    {
+        PropertyInfo p => p.PropertyType,
+        FieldInfo f => f.FieldType,
+        _ => null
+    };
+
+    /// <summary>Whether a member holds a collection (anything enumerable but text), as DataAnnotations reads "length".</summary>
+    private static bool IsCollection(Type? type)
+    {
+        if (type is null) return false;
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        return t != typeof(string) && typeof(IEnumerable).IsAssignableFrom(t);
+    }
+
+    /// <summary>Whether a member can hold what a file input produces: one <c>IBrowserFile</c> or a collection of them.</summary>
+    private static bool IsFileMember(Type? type)
+    {
+        if (type is null) return false;
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        return BlazorFormFieldTypeResolver.IsBrowserFile(t)
+               || (BlazorFormFieldTypeResolver.GetEnumerableElementType(t) is { } element
+                   && BlazorFormFieldTypeResolver.IsBrowserFile(element));
+    }
+
+    /// <summary>
+    /// Reads one end of a <see cref="RangeAttribute"/> the way DataAnnotations does: a bound given as
+    /// text is converted to the attribute's <see cref="RangeAttribute.OperandType"/> in the
+    /// <em>current</em> culture, unless <see cref="RangeAttribute.ParseLimitsInInvariantCulture"/> says
+    /// otherwise. Reading it as invariant text instead turned <c>"0,01"</c> — written by someone whose
+    /// culture uses a decimal comma, and read correctly by the model's own validation — into 1.
+    /// </summary>
+    private static double? ToBound(RangeAttribute range, object? bound)
+    {
+        if (bound is string text && range.OperandType is { } operandType && operandType != typeof(string))
+        {
+            var culture = range.ParseLimitsInInvariantCulture ? CultureInfo.InvariantCulture : CultureInfo.CurrentCulture;
+            try
+            {
+                if (ToDouble(TypeDescriptor.GetConverter(operandType).ConvertFrom(null, culture, text)) is { } converted)
+                    return converted;
+            }
+            catch (Exception ex) when (ex is ArgumentException or FormatException or NotSupportedException
+                                           or InvalidCastException or OverflowException)
+            {
+                // Not something the operand type can read; the culture-neutral reading below may still be.
+            }
+        }
+
+        return ToDouble(bound);
+    }
+
+    private static double? ToDouble(object? value)
     {
         if (value is null) return null;
         // [Range(typeof(DateTime), "2020-01-01", "2030-01-01")] carries strings; dates and times are
         // stored as OLE automation numbers so the same double-based rule and input attributes can
         // handle them. The conversion is shared with the rule that does the comparing, so a bound and
-        // the value it judges can never be read on two different scales.
+        // the value it judges can never be read on two different scales. A date too early for that
+        // scale (before the year 100) bounds nothing it can express, so it is no bound at all.
         if (BlazorFormNumber.TryToDouble(value, out var d)) return d;
-        return BlazorFormNumber.TryToOADate(value, out var date) ? date : null;
+        return BlazorFormNumber.TryToOADate(value, out var date) && !double.IsInfinity(date) ? date : null;
     }
 }

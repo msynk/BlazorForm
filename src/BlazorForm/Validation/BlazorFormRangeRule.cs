@@ -3,7 +3,8 @@ using System.Globalization;
 namespace BlazorForm;
 
 /// <summary>
-/// Enforces an inclusive range. Bounds are held as numbers; a date, time or timestamp is compared as
+/// Enforces a range — inclusive unless <see cref="MinExclusive"/> or <see cref="MaxExclusive"/> says
+/// otherwise. Bounds are held as numbers; a date, time or timestamp is compared as
 /// the OLE automation number that stands for it, which is the same form the schema's
 /// <see cref="BlazorFormFieldDefinition.Min"/>/<see cref="BlazorFormFieldDefinition.Max"/> and the
 /// rendered <c>min</c>/<c>max</c> attributes already use.
@@ -13,11 +14,25 @@ public sealed class BlazorFormRangeRule(double? min, double? max, string? messag
     /// <inheritdoc />
     public string Key => "range";
 
-    /// <summary>The inclusive lower bound, if any.</summary>
+    /// <summary>The lower bound, if any. Inclusive unless <see cref="MinExclusive"/> is set.</summary>
     public double? Min => min;
 
-    /// <summary>The inclusive upper bound, if any.</summary>
+    /// <summary>The upper bound, if any. Inclusive unless <see cref="MaxExclusive"/> is set.</summary>
     public double? Max => max;
+
+    /// <summary>
+    /// Whether the value must be strictly greater than <see cref="Min"/> — JSON Schema's
+    /// <c>exclusiveMinimum</c>, DataAnnotations' <c>MinimumIsExclusive</c>.
+    /// </summary>
+    /// <remarks>
+    /// Carried as a flag rather than approximated by nudging the bound: no nudge is right for every
+    /// value ("greater than 0" is not "at least 0.000000001"), the nudged number leaks into the message
+    /// the user reads, and it exports as an inclusive bound, so the exclusive meaning is lost for good.
+    /// </remarks>
+    public bool MinExclusive { get; init; }
+
+    /// <summary>Whether the value must be strictly less than <see cref="Max"/>.</summary>
+    public bool MaxExclusive { get; init; }
 
     public ValueTask<BlazorFormRuleResult> ValidateAsync(BlazorFormValidationContext ctx)
     {
@@ -31,21 +46,36 @@ public sealed class BlazorFormRangeRule(double? min, double? max, string? messag
             && !BlazorFormNumber.TryToOADate(ctx.Value, out d))
             return new(BlazorFormRuleResult.Success());
 
-        if ((min.HasValue && d < min.Value) || (max.HasValue && d > max.Value))
-            return new(BlazorFormRuleResult.Fail(message ?? RangeMessage(ctx)));
+        // NaN compares false against everything, so without this it sat inside every range there is.
+        if (double.IsNaN(d)) return new(BlazorFormRuleResult.Fail(message ?? RangeMessage(ctx, belowMin: true)));
+
+        var belowMin = min is { } lo && (MinExclusive ? d <= lo : d < lo);
+        var aboveMax = max is { } hi && (MaxExclusive ? d >= hi : d > hi);
+        if (belowMin || aboveMax)
+            return new(BlazorFormRuleResult.Fail(message ?? RangeMessage(ctx, belowMin)));
         return new(BlazorFormRuleResult.Success());
     }
 
-    private string RangeMessage(BlazorFormValidationContext ctx)
+    private string RangeMessage(BlazorFormValidationContext ctx, bool belowMin)
     {
         var type = ctx.Field?.Type;
-        return (min, max) switch
-        {
-            ({ } lo, { } hi) => ctx.Message(BlazorFormMessageKeys.RangeBetween, Format(lo, type), Format(hi, type)),
-            ({ } lo, null) => ctx.Message(BlazorFormMessageKeys.RangeMin, Format(lo, type)),
-            (null, { } hi) => ctx.Message(BlazorFormMessageKeys.RangeMax, Format(hi, type)),
-            _ => ctx.Message(BlazorFormMessageKeys.RangeBetween)
-        };
+
+        // "Between" reads as inclusive, so it is only used when both ends are; otherwise the message
+        // names the end that was crossed, in words that say whether the bound itself is allowed.
+        if (min is { } lo && max is { } hi && !MinExclusive && !MaxExclusive)
+            return ctx.Message(BlazorFormMessageKeys.RangeBetween, Format(lo, type), Format(hi, type));
+
+        if (min is { } low && (belowMin || max is null))
+            return MinExclusive
+                ? ctx.Message(BlazorFormMessageKeys.RangeAbove, Format(low, type))
+                : ctx.Message(BlazorFormMessageKeys.RangeMin, Format(low, type));
+
+        if (max is { } high)
+            return MaxExclusive
+                ? ctx.Message(BlazorFormMessageKeys.RangeBelow, Format(high, type))
+                : ctx.Message(BlazorFormMessageKeys.RangeMax, Format(high, type));
+
+        return ctx.Message(BlazorFormMessageKeys.RangeBetween);
     }
 
     /// <summary>

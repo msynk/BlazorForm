@@ -39,6 +39,8 @@ public static class BlazorFormConditionEvaluator
     {
         null => true,
         string s => string.IsNullOrWhiteSpace(s),
+        // A [Flags] multi-select with nothing ticked, the same empty set an empty List<TEnum> is.
+        Enum e => BlazorFormEnumOptions.IsEmptyFlags(e),
         ICollection c => c.Count == 0,
         IEnumerable e and not string => !e.Cast<object?>().Any(),
         _ => false
@@ -60,6 +62,13 @@ public static class BlazorFormConditionEvaluator
         // Numbers compare numerically (1 == 1.0 == "1"), everything else by invariant text.
         if (BlazorFormNumber.TryToDouble(a, out var da) && BlazorFormNumber.TryToDouble(b, out var db))
             return da.Equals(db);
+
+        // A typed value — a date, a time, an enum member — against the text a condition authored in
+        // JSON carries: the text is read as that type, exactly as the ordering operators already did.
+        // Compared as text instead, a DateTime spelled itself "01/01/2024 00:00:00" and never equalled
+        // "2024-01-01", so Equals was false on the very date GreaterThanOrEqual and LessThanOrEqual
+        // both accepted.
+        if (SameValueOnceTyped(a, b) || SameValueOnceTyped(b, a)) return true;
 
         return string.Equals(
             BlazorFormValueConverter.ToInvariantString(a),
@@ -96,9 +105,49 @@ public static class BlazorFormConditionEvaluator
         return false;
     }
 
+    /// <summary>
+    /// Whether <paramref name="other"/>, read as the type of <paramref name="typed"/>, is the same value.
+    /// Only a typed (non-text) value sets the type, so two strings keep their case-insensitive text
+    /// comparison and a string is never forced into another string's culture-sensitive ordering.
+    /// </summary>
+    private static bool SameValueOnceTyped(object typed, object other)
+    {
+        if (typed is string || typed.GetType() == other.GetType()) return false;
+        // A bool already compares by its text ("True" == "true"), and reading arbitrary text as a bool
+        // makes everything that is not "true" equal to false.
+        if (typed is bool || typed is not IComparable comparable) return false;
+
+        // Blank text is no value of any type, and asking whether it is one is wasted work on a path
+        // every render takes. Between two non-text values only an enum member and its number are worth
+        // reconciling; anything else (a date against a number) is simply not equal — and converting it
+        // would only throw to say so.
+        if (other is string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+        }
+        else if (typed is not Enum)
+        {
+            return false;
+        }
+
+        return BlazorFormValueConverter.TryCoerce(other, typed.GetType(), out var coerced)
+               && coerced is not null
+               && comparable.CompareTo(coerced) == 0;
+    }
+
     private static bool Contains(object? actual, object? expected)
     {
         if (expected is null) return false;
+
+        // A [Flags] value is a set of members; "contains Write" asks whether that flag is set. It is not
+        // a collection to enumerate or text to search, so it used to answer false whatever was ticked.
+        if (actual is Enum flags && flags.GetType().IsDefined(typeof(FlagsAttribute), inherit: false))
+        {
+            if (!BlazorFormValueConverter.TryCoerce(expected, flags.GetType(), out var flag) || flag is not Enum member)
+                return false;
+            // The zero member is the empty set, which every value "contains" by HasFlag's arithmetic.
+            return BlazorFormEnumOptions.IsEmptyFlags(member) ? BlazorFormEnumOptions.IsEmptyFlags(flags) : flags.HasFlag(member);
+        }
 
         if (actual is string s)
             return s.Contains(BlazorFormValueConverter.ToInvariantString(expected), StringComparison.OrdinalIgnoreCase);

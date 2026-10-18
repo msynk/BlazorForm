@@ -116,5 +116,11 @@ if (state.IsSubmitSuccessful) { /* … */ }
 
     private Task HandleSubmit(BlazorFormState state) => Task.CompletedTask;
 
-    public void Dispose() => _state.StateChanged -= OnStateChanged;
+    public void Dispose()
+    {
+        _state.StateChanged -= OnStateChanged;
+        // The page created the state, so the page disposes it: an options load or async rule still in
+        // flight is cancelled instead of finishing against a form nobody is looking at.
+        _state.Dispose();
+    }
 }

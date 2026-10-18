@@ -43,7 +43,7 @@
 @code {
     // Options may come from an async provider, so ask for them on first render and again whenever a
     // dependency change has invalidated the cache.
-    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+    protected override Task OnParametersSetAsync() => LoadOptionsAsync();
 
     // A select fires `change` when the user picks, never `input`, so it always writes on change
     // regardless of the field's update trigger — "as you type" has no meaning for a dropdown.

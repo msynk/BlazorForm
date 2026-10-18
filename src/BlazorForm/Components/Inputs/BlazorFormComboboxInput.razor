@@ -47,8 +47,11 @@
         }
     </datalist>
 
-    @* The count is what makes a screen reader announce; the browser's own filtering is silent, so
-       without this a blind user typing into the box has no idea whether anything matches. *@
+    @* How many choices the list holds, and whether it is still loading or failed to load — said when the
+       list arrives or changes, so a screen-reader user knows there is something to type towards. It is
+       not a count of what matches the text typed so far: the browser filters the list itself and never
+       tells the page, and finding out would mean a round-trip per keystroke, which this control
+       deliberately does not make (see WantsInputEvent). *@
     <p class="ff-sr-only" aria-live="polite">@Announce(choices.Count)</p>
 </div>
 
@@ -81,7 +84,7 @@
                                               @onblur="OnBlur" />
     ;
 
-    protected override Task OnParametersSetAsync() => Context.EnsureOptionsAsync().AsTask();
+    protected override Task OnParametersSetAsync() => LoadOptionsAsync();
 
     /// <summary>
     /// A combobox never writes as the user types, whatever <see cref="BlazorFormFieldDefinition.UpdateOn"/>
@@ -150,15 +153,26 @@
     /// </summary>
     private string? GroupSuffix(BlazorFormSelectOption option) => option.Group;
 
+    /// <summary>
+    /// Whether the control is wrapped — by configuration, never by value. See the text input: a wrapper
+    /// that came and went with the value replaced the input element, and the caret with it, the moment
+    /// a choice was committed while the box still had focus.
+    /// </summary>
     private bool HasAffix
-        => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix) || ShowClear;
+        => !string.IsNullOrEmpty(Field.Prefix) || !string.IsNullOrEmpty(Field.Suffix) || OffersClear;
 
-    private bool ShowClear
-        => Attr("clearable", false) && !DisabledOrReadOnly && Context.StringValue.Length > 0;
+    private bool ShowClear => OffersClear && Context.StringValue.Length > 0;
+
+    private bool OffersClear => Attr("clearable", false) && !DisabledOrReadOnly;
 
     private string ClearLabel => Context.Text(BlazorFormMessageKeys.Clear);
 
-    private Task Clear() => Context.SetValueAsync(null);
+    /// <summary>Empties the box and puts the caret back in it, rather than on the page body.</summary>
+    private async Task Clear()
+    {
+        await Context.SetValueAsync(null);
+        await FocusAsync();
+    }
 
     private string Announce(int count) => Context.IsLoadingOptions
         ? Context.Text(BlazorFormMessageKeys.SelectLoading)

@@ -35,10 +35,15 @@ public sealed class BlazorFormBuilder<TModel> : BlazorFormBuilder where TModel :
         var (path, member) = ResolvePath(selector);
         var valueType = member is PropertyInfo p ? p.PropertyType : typeof(TValue);
 
-        var def = new BlazorFormFieldDefinition(path, BlazorFormFieldTypeResolver.Resolve(valueType))
+        var fieldType = BlazorFormFieldTypeResolver.Resolve(valueType);
+        var def = new BlazorFormFieldDefinition(path, fieldType)
         {
             ValueType = valueType,
-            Label = BlazorFormFieldBuilder.Humanize(member.Name)
+            Label = BlazorFormFieldBuilder.Humanize(member.Name),
+            // As the generator does: a value that can only be changed through a setter it has no public
+            // one of is shown, never edited — the accessor would refuse the write anyway. A class-typed
+            // group or list is edited in place and stays editable whatever its setter.
+            ReadOnly = member is PropertyInfo property && BlazorFormModelDataAccessor.IsReadOnlyForForm(property, fieldType)
         };
 
         var builder = new BlazorFormFieldBuilder(def);
@@ -49,6 +54,18 @@ public sealed class BlazorFormBuilder<TModel> : BlazorFormBuilder where TModel :
 
         BlazorFormDataAnnotationsScanner.Apply(member, def);
         configure?.Invoke(builder);
+
+        // Raw content has no built-in control: a file input produces an IBrowserFile, which cannot be
+        // written into a byte[] or a Stream. Left to render, the field failed only then — an exception
+        // in the middle of a page, on a server a dropped circuit. Here it fails where it was written.
+        if (BlazorFormFieldTypeResolver.IsBinaryContent(valueType) && string.IsNullOrEmpty(def.CustomRenderer))
+            throw new ArgumentException(
+                $"'{path}' holds raw content ({valueType.Name}), which no built-in control can produce. " +
+                "Give it a renderer that can — .CustomRenderer(\"key\") registered with " +
+                "services.AddBlazorForm(r => r.RegisterCustom(\"key\", typeof(MyComponent))) — or leave the property " +
+                "out and bind an IBrowserFile instead, reading it in your submit handler.",
+                nameof(selector));
+
         Add(def);
         return this;
     }

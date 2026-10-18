@@ -187,8 +187,47 @@ All notable changes to this project are documented here. The format follows
   takes the user to the first problem after a failed submit.
 - **`BlazorFormView.SubmitAsync()` / `Reset()`** — the built-in submit pipeline is now callable from a
   custom `Actions` row or a button elsewhere on the page.
+- **`BlazorFormValidationContext.CancellationToken`** — signalled when a validation run is superseded
+  (the user typed again, pressed Next twice, reset the form), so an async rule can pass it to the
+  remote call it makes instead of finishing a lookup nobody is waiting for.
+- **Exclusive range bounds** — `BlazorFormRangeRule.MinExclusive` / `MaxExclusive`, with their own
+  messages ("Must be greater than 0."). JSON Schema's `exclusiveMinimum`/`exclusiveMaximum` and
+  DataAnnotations' `MinimumIsExclusive`/`MaximumIsExclusive` map onto them instead of a nudged bound.
+- **`BlazorFormState.IdPrefix` / `BlazorFormView.IdPrefix`** — two forms on one page binding the same
+  schema rendered the same ids, so labels, `aria-describedby` and summary links in one pointed into the
+  other. The default output (`ff_` + path) is unchanged.
+- `BlazorFormMultipleOfRule.Factor`, and the message keys `RangeAbove`, `RangeBelow`, `Uuid` and
+  `RequiredHint`.
 
 ### Changed
+
+- **A superseded `ValidateAsync` returns false.** It used to return whatever messages happened to be on
+  record — none at all on a form never validated — so a submit whose validation was overtaken could go
+  ahead on data nobody had checked. The run that replaced it publishes the real verdict.
+- **An options provider reads values relative to its row.** Inside a repeater `ctx.Value("Country")` is
+  that row's country, exactly as `dependsOn: "Country"` already meant; it used to read the root.
+- **`byte[]` and `Stream` properties are no longer file pickers.** The file input writes an
+  `IBrowserFile`, which can never be stored into either, so every upload failed. The generator skips
+  them; only `IBrowserFile`-based members become file fields.
+- **A read-only object or repeater makes everything inside it read-only**, and a read-only repeater no
+  longer *disables* its rows — which took them out of the tab order and the screen reader's reach.
+- **Error-summary links name the current page** and do not navigate: a bare `#id` resolved against
+  `<base href="/">` and sent the router to the home page. They also reach fields on another wizard step,
+  objects, repeater rows and the list as a whole.
+- **JSON Schema export of choices follows the standard**: a multi-select is `type: array`,
+  `uniqueItems: true` with its choices under `items`; a select says `x-widget: "select"`; typed enums
+  keep their JSON type; a tag list's per-tag constraints go under `items`. The old shapes still import.
+- **A `DateTimeOffset` keeps its offset.** The input shows the value's own wall-clock time, as before,
+  and now reads it back with that same offset rather than the server's — which used to shift the
+  instant on every edit.
+- **A writable dictionary handed to the form is its live store** at every level, so the caller sees
+  every edit in place (a read-only one is copied). Don't share one dictionary between forms.
+- **A combobox exported with a plain `enum` imports as a closed choice**, which is what `enum` means to
+  every validator; an open one travels as `x-allowCustom` + `x-enum`.
+- **An exception thrown by an `OnFieldChanged` handler is dispatched** to the renderer (an
+  `ErrorBoundary` or the circuit) instead of being lost.
+- **A read-only or disabled form does not submit on Enter** unless the caller rendered content of their
+  own (which may hold a submit button of its own — a "review and confirm" screen).
 
 - **A collection of enum members generates a multi-select, not a repeater.** A `List<TDay>` used to
   render as add-a-row, open-a-dropdown, pick-Monday, add-a-row, open-a-dropdown, pick-Tuesday — for a
@@ -491,6 +530,63 @@ All notable changes to this project are documented here. The format follows
   after the form has been reset.
 - A radio or multi-select group with no visible label is named inline rather than pointing
   `aria-labelledby` at an element that was never rendered.
+- **Overlapping validations crashed.** A second Next, submit or `ValidateAsync` while an async rule was
+  still waiting disposed the first run's token source, and the first run then read its token and threw
+  `ObjectDisposedException` — out of a click handler, taking a Blazor Server circuit with it.
+- **The "checking…" spinner could stay up for good.** A keystroke's synchronous check superseding a
+  blur's remote one never cleared the flag the remote one had raised.
+- **Removing a repeater row left its state behind.** A rejected entry kept being re-reported at its old
+  path — on submit, as an error on a row that no longer existed, blocking the form for good — and a
+  cascading select's loaded choices stayed put, so the row that moved up offered the removed row's
+  cities. Rejected entries and loaded choices now follow their rows like messages do, and work in flight
+  for a moved row is abandoned.
+- **A rejected entry in a field a condition then hid blocked submit** from a control the user could
+  neither see nor correct.
+- **Repeater operations on a `T[]` property** threw (remove, move) or silently did nothing (add);
+  `Reset()` threw on any array property. Fixed-size collections are now edited by replacement.
+- `Reset()` abandons a validation still in flight instead of letting it land on the cleared form, and a
+  cancelled options load no longer takes down its replacement's in-flight flag.
+- **A new dictionary-backed row answered its conditions from the root.** A row only owned the keys
+  someone had written, so `VisibleWhen("Kind", …)` on a fresh row read the root's `Kind`.
+- **A duplicated row shared the original's multi-select or tag list.**
+- **A failed wizard submit could do nothing visible.** When the field at fault was on another step,
+  focus could not reach it; the wizard now moves to the earliest step with an error.
+- **A provider that cancelled itself** (a timed-out HTTP call) was not recorded as failed, so the control
+  asked again on every render.
+- Components: a dependent select whose previous list was empty never reloaded; duplicate values in a
+  tag list crashed the render; a debounced field lost its last keystrokes on Enter; focus targets and
+  the summary's autofocus stayed on a replaced state; a standalone `BlazorFormField` never re-rendered;
+  a clearable box lost focus on its first keystroke; messages about an object, a row or a hidden field
+  were never drawn; the submit announcement was inserted already filled in (and so not read);
+  `:read-only` styling greyed out every select, file and colour input; native controls ignored the dark
+  theme (`color-scheme`); a cleared file input kept showing the old file; repeater reorders and the
+  last removal were not announced; a required multi-select or tag list was not announced as required.
+- JSON Schema import: a recursive `$ref` or `allOf` overflowed the stack (and a wide one exhausted
+  memory) — imports now stop at a cycle and refuse runaway schemas with a `FormatException`; boolean
+  subschemas, draft-04 boolean exclusive bounds and non-numeric values where numbers were expected
+  crashed the import; `allOf` kept only the last `if`/`then`, replaced rather than merged a property
+  described twice, and let a looser bound win; keywords beside a `$ref` were dropped; an array without
+  a single `items` schema produced a repeater that threw when rendered; exclusive bounds were nudged
+  into wrong inclusive ones; `multipleOf` was exported from the step; a closed combobox came back open;
+  numeric and boolean enums came back as strings; a partly representable `if` was half-applied;
+  `format: uuid` replaced a document's own `pattern`; percent-encoded pointers did not resolve;
+  conditional requiredness inside array items was ignored; unknown condition operators were read as
+  `Equals`. Export: dates were written in the current culture's format, small integers as strings,
+  non-finite numbers threw, and an object field lost `readOnly`.
+- Data and validation: a date before year 100 crashed range validation; writes through a struct
+  property or a list of structs were silently lost; `UniqueItems` reported every list of objects as
+  duplicates; `[RegularExpression]` was matched anywhere in the value rather than against all of it;
+  properties with non-public setters were editable; `FindByPath` could not see inside a dotted
+  container name; `multipleOf` rejected valid amounts such as 1234567.89 against 0.01; `"1,5"` was read
+  as 15 under a comma-decimal culture; `HashSet<T>`, `ISet<T>` and `ObservableCollection<T>` properties
+  could never be written; a condition comparing a date with a date string disagreed with `>=`;
+  `Contains` and `Required` did not understand `[Flags]`; a tag list's `pattern` was never checked; NaN
+  passed every range; the email rule accepted a trailing newline; `"12"` was read as 12 days;
+  `IValidatableObject` ran twice; `CompareRule` thought `5` and `5L` differ; a fractional number was
+  silently rounded into an integer field; an enum select accepted undefined numbers.
+- The dictionary accessor looks keys up case-insensitively at every level, writes into typed nested
+  dictionaries rather than replacing them, reads `JsonElement` values, and never throws from `SetValue`.
+- The demo pages dispose the form states they create.
 
 ## [0.2.0]
 

@@ -34,14 +34,15 @@
        somewhere of their own to live — unless the summary is already showing, which lists them first. *@
     @if (FormLevelMessages.Count > 0 && !ShowErrorSummary)
     {
-        <BlazorFormValidationMessages Messages="FormLevelMessages" Show="FormState.IsSubmitted" Id="ff_form_errors" />
+        <BlazorFormValidationMessages Messages="FormLevelMessages" Show="FormState.IsSubmitted"
+                                      Id="@BlazorFormFieldContext.FormElementId(FormState, "form_errors")" />
     }
 
-    @* Silent unless nothing else reports the outcome — see SubmitAnnouncement. *@
-    @if (SubmitAnnouncement is { } announcement)
-    {
-        <p class="ff-sr-only" role="status">@announcement</p>
-    }
+    @* Silent unless nothing else reports the outcome — see SubmitAnnouncement. Always in the page, and
+       only its text changes: a live region inserted together with its content is not reliably read out
+       at all, so rendering the region only once there was something to say made the one announcement
+       it exists for the one most likely to be lost. *@
+    <p class="ff-sr-only" role="status">@SubmitAnnouncement</p>
 
     @if (FormState.Definition.IsWizard)
     {
@@ -268,6 +269,15 @@
     /// <summary>Extra CSS classes for the form element.</summary>
     [Parameter] public string? Class { get; set; }
 
+    /// <summary>
+    /// What every DOM id in this form starts with (<c>ff_</c> by default). Ids are derived from field
+    /// paths, so two forms on one page that share field names — or render the same schema twice — also
+    /// share ids, and a label, an <c>aria-describedby</c> or an error-summary link in one of them then
+    /// points into the other. Give each form its own prefix. Leave it unset (null) to keep whatever the
+    /// state already has, so a caller-supplied state can own it.
+    /// </summary>
+    [Parameter] public string? IdPrefix { get; set; }
+
     [Parameter(CaptureUnmatchedValues = true)] public IDictionary<string, object>? AdditionalAttributes { get; set; }
 
     /// <summary>
@@ -305,13 +315,17 @@
     /// Only when nothing else is already telling the user: the error summary announces itself and
     /// takes focus, and focus-the-first-error lands on a control whose message is read out through
     /// <c>aria-describedby</c>. With both turned off, a screen-reader user presses Submit, the page
-    /// does not move, and nothing at all is said — which reads as a button that does nothing.
+    /// does not move, and nothing at all is said — which reads as a button that does nothing. The same
+    /// is true when focus-the-first-error is on but found nothing to land on — every error belongs to
+    /// an object, a row or a hidden field, none of which has a control of its own — so that submit is
+    /// announced too.
     /// </remarks>
     private string? SubmitAnnouncement
     {
         get
         {
-            if (ShowErrorSummary || FocusFirstError) return null;
+            var focusMissed = _focusMissedForSubmit != 0 && _focusMissedForSubmit == FormState.SubmitCount;
+            if (ShowErrorSummary || (FocusFirstError && !focusMissed)) return null;
             if (!FormState.IsSubmitted || FormState.IsValidating || !FormState.HasErrors) return null;
 
             var count = FormState.OrderedMessages().Count(m => m.Severity == BlazorFormValidationSeverity.Error);
@@ -385,9 +399,11 @@
     }
 
     // Pushed in both directions when the parameter is set, so toggling it off works; left alone when
-    // it is null, so a caller-supplied state can own the flag itself.
+    // it is null, so a caller-supplied state can own the flag itself. The id prefix rides along for the
+    // same reason, and is applied before anything renders an id from it.
     private void ApplyReadOnly()
     {
+        if (IdPrefix is not null) FormState.IdPrefix = IdPrefix;
         if (ReadOnly is { } value) FormState.ReadOnly = value;
         if (Disabled is { } disabled) FormState.Disabled = disabled;
     }
@@ -397,6 +413,8 @@
         if (ReferenceEquals(FormState, state)) return;
         Detach();
         FormState = state;
+        // Counted in the old state's submits, which mean nothing in the new one.
+        _focusMissedForSubmit = 0;
         FormState.StateChanged += OnStateChanged;
         FormState.FieldChanged += OnFieldChangedInternal;
     }
@@ -421,9 +439,30 @@
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
+    /// <summary>
+    /// Relays a field change to <see cref="OnFieldChanged"/>. A handler that fails is reported the way any
+    /// failing event handler is — through the renderer, to an error boundary or the circuit's log.
+    /// </summary>
+    /// <remarks>
+    /// The state raises the event in the middle of a write, so the handler cannot simply be awaited
+    /// here. It used to be started and forgotten: an async handler that threw (an autosave whose request
+    /// failed, say) faulted a task nobody looked at, and the failure vanished without a trace. A handler
+    /// that threw synchronously was worse, escaping into the write itself and abandoning it half-done.
+    /// </remarks>
     private void OnFieldChangedInternal(string path)
     {
-        if (OnFieldChanged.HasDelegate) InvokeAsync(() => OnFieldChanged.InvokeAsync(path));
+        if (!OnFieldChanged.HasDelegate) return;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await OnFieldChanged.InvokeAsync(path);
+            }
+            catch (Exception ex)
+            {
+                await DispatchExceptionAsync(ex);
+            }
+        });
     }
 
     /// <summary>Accessible name of the stepper landmark. Defaults to the message provider's text.</summary>
@@ -507,8 +546,20 @@
             return;
         }
 
+        // A read-only or disabled form has no submit button, and pressing Enter in one of its boxes is
+        // not a request to submit it: the browser submits a form with a single text box on Enter
+        // whether or not it has a button, and that used to run OnValidSubmit from a review screen. The
+        // public SubmitAsync still submits — a caller asking for that has said so — and so does a submit
+        // button the caller rendered themselves: a "review and confirm" screen is read-only on purpose
+        // and still has to be confirmable. The event cannot say whether Enter or a button raised it, so
+        // the guard applies only where the only buttons are the view's own, which it already hides.
+        if ((FormState.ReadOnly || FormState.Disabled) && !RendersCallerContent) return;
+
         await HandleSubmit();
     }
+
+    /// <summary>Whether the caller rendered anything inside the form that could hold a submit button.</summary>
+    private bool RendersCallerContent => Actions is not null || ChildContent is not null || Footer is not null || Header is not null;
 
     private async Task<bool> HandleSubmit()
     {
@@ -516,8 +567,39 @@
             onValid: state => OnValidSubmit.InvokeAsync(state),
             onInvalid: state => OnInvalidSubmit.InvokeAsync(state));
 
-        if (!valid) _focusErrorForSubmit = FormState.SubmitCount;
+        if (!valid)
+        {
+            ShowStepWithFirstError();
+            _focusErrorForSubmit = FormState.SubmitCount;
+        }
         return valid;
+    }
+
+    /// <summary>
+    /// After a failed submit on a wizard, moves to the earliest step with something to fix — unless the
+    /// step the user is on has something already.
+    /// </summary>
+    /// <remarks>
+    /// Submit validates every step, and the field at fault need not be on this one: going back to change
+    /// an answer can break a rule on a step that was passed earlier. Submit then did nothing anyone could
+    /// see — focus cannot reach a control that is not rendered, and the summary is off by default — so
+    /// the form looked like it was ignoring the button.
+    /// </remarks>
+    private void ShowStepWithFirstError()
+    {
+        if (FormState.CurrentStep is not { } current) return;
+
+        var earliest = -1;
+        foreach (var message in FormState.AllMessages)
+        {
+            if (message.Severity != BlazorFormValidationSeverity.Error || message.FieldPath.Length == 0) continue;
+            if (BlazorFormState.StepContains(current, message.FieldPath)) return;
+
+            var step = FormState.VisibleStepContaining(message.FieldPath);
+            if (step >= 0 && (earliest < 0 || step < earliest)) earliest = step;
+        }
+
+        if (earliest >= 0) FormState.GoToStep(earliest);
     }
 
     private int _focusErrorForSubmit;
@@ -531,15 +613,26 @@
             return;
         }
 
-        var wantsErrorFocus = _focusStepErrors || _focusErrorForSubmit != 0;
+        var forSubmit = _focusErrorForSubmit;
+        var wantsErrorFocus = _focusStepErrors || forSubmit != 0;
         _focusStepErrors = false;
         _focusErrorForSubmit = 0;
 
         // The summary owns focus when it is showing; two components pulling at it would be a race.
         if (!wantsErrorFocus || !FocusFirstError || ShowErrorSummary) return;
 
-        await FocusFirstErrorField();
+        // Nothing took focus — the errors all belong to objects, rows or hidden fields, which have no
+        // control of their own. The submit then has to be announced instead, or it reads as a button
+        // that does nothing at all (see SubmitAnnouncement).
+        if (!await FocusFirstErrorField() && forSubmit != 0 && forSubmit == FormState.SubmitCount)
+        {
+            _focusMissedForSubmit = forSubmit;
+            StateHasChanged();
+        }
     }
+
+    // The submit attempt whose errors focus could not reach, so SubmitAnnouncement speaks for it.
+    private int _focusMissedForSubmit;
 
     private async Task FocusStepBody()
     {
@@ -558,14 +651,15 @@
     /// the first offender may be on a step that is not showing, or be a control with no focusable
     /// element of its own.
     /// </summary>
-    private async Task FocusFirstErrorField()
+    private async Task<bool> FocusFirstErrorField()
     {
         foreach (var message in FormState.OrderedMessages())
         {
             if (message.Severity != BlazorFormValidationSeverity.Error) continue;
             if (string.IsNullOrEmpty(message.FieldPath)) continue;
-            if (await FormState.FocusAsync(message.FieldPath)) return;
+            if (await FormState.FocusAsync(message.FieldPath)) return true;
         }
+        return false;
     }
 
     public void Dispose()

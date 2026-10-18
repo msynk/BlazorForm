@@ -53,31 +53,49 @@ public sealed class BlazorFormDefinition
         var direct = Fields.FirstOrDefault(f => string.Equals(f.Name, path, StringComparison.OrdinalIgnoreCase));
         if (direct is not null) return direct;
 
-        var segments = BlazorFormPath.Parse(path);
-        BlazorFormFieldDefinition? current = null;
-
-        foreach (var seg in segments)
+        // The same goes for a container: `Object(x => x.Customer.Address, …)` is one top-level field
+        // named "Customer.Address", and "Customer.Address.City" lies beneath it. Splitting the whole path
+        // at every dot looked for a top-level "Customer" that does not exist, so nothing under such a
+        // container could be found — its change handlers never ran, and a wizard step naming one of its
+        // fields skipped validating it. So the walk starts from the top-level field whose name is the
+        // longest prefix of the path (ending at a segment boundary), which for an ordinary "Address.City"
+        // is simply "Address".
+        foreach (var root in Fields
+                     .Where(f => f.Name.Length > 0
+                                 && f.Name.Length < path.Length
+                                 && path[f.Name.Length] is '.' or '['
+                                 && path.StartsWith(f.Name, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(f => f.Name.Length))
         {
-            if (seg.IsIndex)
-            {
-                // items[0] resolves to the template describing every element.
-                current = current?.ItemTemplate;
-                // An array of objects keeps its children on the template itself, so stay there.
-                if (current is null) return null;
-                continue;
-            }
+            if (Walk(root, path[root.Name.Length..]) is { } found) return found;
+        }
 
-            var candidates = current is null
-                ? Fields
-                : current.Type == BlazorFormFieldType.Array && current.ItemTemplate is not null
+        return null;
+
+        static BlazorFormFieldDefinition? Walk(BlazorFormFieldDefinition start, string rest)
+        {
+            var current = start;
+            foreach (var seg in BlazorFormPath.Parse(rest))
+            {
+                if (seg.IsIndex)
+                {
+                    // items[0] resolves to the template describing every element.
+                    // An array of objects keeps its children on the template itself, so stay there.
+                    if (current.ItemTemplate is not { } template) return null;
+                    current = template;
+                    continue;
+                }
+
+                var candidates = current.Type == BlazorFormFieldType.Array && current.ItemTemplate is not null
                     ? current.ItemTemplate.Children
                     : current.Children;
 
-            current = candidates.FirstOrDefault(f => string.Equals(f.Name, seg.Name, StringComparison.OrdinalIgnoreCase));
-            if (current is null) return null;
+                var next = candidates.FirstOrDefault(f => string.Equals(f.Name, seg.Name, StringComparison.OrdinalIgnoreCase));
+                if (next is null) return null;
+                current = next;
+            }
+            return current;
         }
-
-        return current;
     }
 
     /// <summary>Enumerates every field in the schema, recursing into objects and array item templates.</summary>

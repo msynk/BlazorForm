@@ -604,7 +604,20 @@ public sealed class BlazorFormFieldBuilder
     /// </summary>
     private void EnsureChoiceType()
     {
-        if (!_field.IsChoice) _field.Type = BlazorFormFieldType.Select;
+        if (_field.IsChoice) return;
+
+        // A schema-only field declared as a number and then given choices is still a number: the
+        // choices are a closed set of them. Without a value type the selection was stored as the
+        // option's text, so `Integer("seats").Options(…)` held "2" rather than 2, and it exported as a
+        // string enum that came back as one. A typed model already supplies its own.
+        _field.ValueType ??= _field.Type switch
+        {
+            BlazorFormFieldType.Integer => typeof(long?),
+            BlazorFormFieldType.Number or BlazorFormFieldType.Range => typeof(double?),
+            BlazorFormFieldType.Checkbox => typeof(bool?),
+            _ => null
+        };
+        _field.Type = BlazorFormFieldType.Select;
     }
 
     internal static string Humanize(string name)

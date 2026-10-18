@@ -34,7 +34,9 @@ public static class BlazorFormSchemaGenerator
     {
         var props = type
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+            // A public getter, not merely CanRead: a property whose getter is private is not part of the
+            // model's public surface, and a form has no business displaying it.
+            .Where(p => BlazorFormModelDataAccessor.IsPubliclyReadable(p) && p.GetIndexParameters().Length == 0)
             .Where(p => !ShouldSkip(p, options))
             // Inherited properties come first, then the type's own — the order the class reads in, and
             // the order anyone declaring `Article : Document` expects. Metadata tokens alone cannot say
@@ -62,7 +64,9 @@ public static class BlazorFormSchemaGenerator
         {
             ValueType = propType,
             Label = BlazorFormFieldBuilder.Humanize(prop.Name),
-            ReadOnly = !prop.CanWrite
+            // A public setter, not merely CanWrite, which is also true of a private or internal one — and
+            // only where editing goes through it: a class-typed group or list is edited in place.
+            ReadOnly = BlazorFormModelDataAccessor.IsReadOnlyForForm(prop, fieldType)
         };
 
         var underlying = Nullable.GetUnderlyingType(propType) ?? propType;
@@ -83,8 +87,7 @@ public static class BlazorFormSchemaGenerator
         else if (fieldType == BlazorFormFieldType.File)
         {
             // A collection of files is one control that accepts several, not a repeater of file pickers.
-            field.Multiple = BlazorFormFieldTypeResolver.GetEnumerableElementType(underlying) is not null
-                             && underlying != typeof(byte[]);
+            field.Multiple = BlazorFormFieldTypeResolver.GetEnumerableElementType(underlying) is not null;
         }
         else if (fieldType == BlazorFormFieldType.Array && depth < options.MaxDepth)
         {
@@ -157,9 +160,16 @@ public static class BlazorFormSchemaGenerator
         if (prop.GetCustomAttribute<DisplayAttribute>()?.GetAutoGenerateField() == false)
             return true;
 
+        // Raw content (byte[], Stream, a list of either) has no control that can fill it: a file input
+        // produces an IBrowserFile, which has to be read asynchronously before it is bytes. Generated as
+        // a file field it was a picker that refused every file; generated as anything else it is worse.
+        // A model that wants an upload declares an IBrowserFile and reads it in its submit handler.
+        if (BlazorFormFieldTypeResolver.IsBinaryContent(prop.PropertyType)) return true;
+
         // A get-only scalar cannot be edited; whether it is shown read-only or dropped is configurable.
-        // Containers stay regardless — their children may well be writable.
-        if (!prop.CanWrite && options.ReadOnlyProperties == BlazorFormReadOnlyPropertyHandling.Skip)
+        // Containers stay regardless — their children may well be writable. "Get-only" means no
+        // public setter: a private or internal one is not the form's to call.
+        if (!BlazorFormModelDataAccessor.IsPubliclyWritable(prop) && options.ReadOnlyProperties == BlazorFormReadOnlyPropertyHandling.Skip)
         {
             var fieldType = BlazorFormFieldTypeResolver.Resolve(prop.PropertyType);
             if (fieldType is not (BlazorFormFieldType.Object or BlazorFormFieldType.Array)) return true;

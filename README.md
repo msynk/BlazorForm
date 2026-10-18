@@ -19,7 +19,7 @@ Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema,
 - **Computed values** – derive a field from the rest of the form (totals, full names), including per-row formulas inside a repeater.
 - **Change handlers** – `OnChange(...)` puts "when the country changes, clear the city" in the schema, where the rest of the field's behaviour already lives.
 - **Wizards** – split a form into ordered steps with per-step validation, conditional steps and a clickable stepper.
-- **Accessible by default** – labels, `aria-required` / `aria-invalid` / `aria-describedby`, live-announced errors, grouped radio and multi-select controls, real focus management (autofocus, and focus-the-first-error after a failed submit), and an optional error summary that links to each field.
+- **Accessible by default** – labels, `aria-required` / `aria-invalid` / `aria-describedby` (so a field's message is read out when focus reaches it), grouped radio and multi-select controls, real focus management (autofocus, and focus-the-first-error after a failed submit, with the outcome announced when there is no field to take focus), live announcements for repeater, tag and character-count changes, and an optional error summary that links to each field.
 - **Localisable** – swap *all* the built-in English text — validation messages, buttons, placeholders, repeater labels — for your own via `IBlazorFormMessageProvider`.
 - **Schema diagnostics** – `Definition.Validate()` catches duplicate field names, arrays with no item template, steps naming fields that do not exist, conditions pointing nowhere, and settings a control can never honour.
 - **Composable layout** – render the whole form with `BlazorFormView`, cluster fields into named
@@ -53,7 +53,14 @@ Add the stylesheet to your host page:
 ```
 
 Every colour — plus the corner radius, the field gap and the form's `--ff-max-width` — is a CSS custom
-property on `.ff-form`, and the default theme follows the OS light/dark preference.
+property on `.ff-form`, and the default theme follows the OS light/dark preference. Each theme also sets
+`color-scheme`, so the parts of a control the browser draws itself — date pickers, open dropdowns, the
+file button — follow it too.
+
+Every DOM id the form renders is derived from a field's path and starts with `ff_`. Two forms on one
+page that share field names would share ids — and a label or an error-summary link in one would point
+into the other — so give each its own prefix with `IdPrefix` on `BlazorFormView` (or
+`state.IdPrefix`).
 
 ## Quick start
 
@@ -95,6 +102,26 @@ public class Contact
                 Model="_model"
                 OnValidSubmit="HandleValidSubmit" />
 ```
+
+Attributes keep the meaning DataAnnotations gives them, so the form never accepts what the model's own
+validation would then reject:
+
+- `[RegularExpression]` must match the **whole** value (the pattern is anchored as `^(?:…)$`).
+- `[Range]` honours `MinimumIsExclusive` / `MaximumIsExclusive`, and text bounds are read in the
+  current culture unless `ParseLimitsInInvariantCulture` is set.
+- `[MinLength]`, `[MaxLength]` and `[Length]` count **items** on any collection — a repeater, a
+  multi-select over `List<TEnum>`, a list of files — and characters on text.
+- `[Url]` accepts `http`, `https` and `ftp`, as `UrlAttribute` does.
+- `[FileExtensions]` on a `string` checks the file name it holds; on an `IBrowserFile` it becomes the
+  picker's `accept` list.
+
+Only what a form can actually edit is generated. A value that is replaced when it is edited — a scalar,
+a struct, an array — needs a **public** setter (a `private`/`internal` one is rendered read-only, and
+the accessor refuses writes through it). A class-typed group or list is edited in place, so
+`Shipping { get; private set; } = new()` and `Lines { get; private set; } = new()` stay fully editable.
+`byte[]` / `Stream` properties are left out — a file input produces an `IBrowserFile`, so declare one
+of those and read it in your submit handler — and the typed builder refuses one unless you give it a
+`CustomRenderer`. Nested `struct`s are editable like classes.
 
 ### 2. With the fluent builder
 
@@ -147,24 +174,60 @@ var definition = BlazorFormJsonSchemaImporter.Import(jsonSchemaString);
 ```
 
 The importer covers draft-07 through 2020-12: `type` (including nullable unions such as
-`["string","null"]`), `properties`, `required`, `enum`, `const`, `format`, `default`, `examples`,
-`readOnly`, `minimum`/`maximum` and their exclusive forms, `multipleOf`, `minLength`/`maxLength`,
-`pattern`, `items`, `minItems`/`maxItems`, `uniqueItems`, `$ref` into `$defs`/`definitions`, `allOf`
-(merged), `if`/`then`/`else` and `dependentRequired`/`dependencies` — the last two mapped onto
-conditional requiredness.
+`["string","null"]`), boolean subschemas (`true` accepts anything; a `false` property is left out),
+`properties`, `required`, `enum`, `const`, `format`, `default`, `examples`, `readOnly`,
+`minimum`/`maximum` and their exclusive forms (draft-04's boolean `exclusiveMinimum` too, as OpenAPI 3.0
+writes it), `multipleOf`, `minLength`/`maxLength`, `pattern`, `items`, `minItems`/`maxItems`,
+`uniqueItems`, `$ref` into `$defs`/`definitions`, `allOf` (merged), `if`/`then`/`else` and
+`dependentRequired`/`dependencies` — the last two mapped onto conditional requiredness.
+
+A few of those deserve a sentence each:
+
+- **`$ref`** keeps the keywords written beside it, and they win over the definition's own — that is how
+  `{"$ref":"#/$defs/Address","title":"Billing address"}` labels a shared shape. A *recursive* reference
+  (a category with sub-categories) describes an unbounded tree, which no form can render, so it is
+  followed one level — a node and its children — and the property that would repeat it again is left
+  out; a repeater whose rows refer back that far gets a text box per row instead. Recursion spelled
+  through `allOf` (pydantic v1 and Swashbuckle wrap described references that way) is recognised the
+  same way, and a definition that both extends and contains another is not mistaken for recursion.
+- **`allOf`** means every branch applies. Annotations (`title`, `description`, `x-` hints) cannot all
+  apply, so the later one wins and the outer schema has the last word; constraints combine — `required`
+  and `dependentRequired` are unioned, a property (or an array's `items`) described by two branches
+  keeps both descriptions, the stricter of two bounds wins, two `pattern`s are both enforced, two
+  `enum`s keep only the values both allow, and each branch's `if`/`then`/`else` is applied on its own.
+  `type`, `format`, `const` and `multipleOf` take the later branch's word.
+- **`if`/`then`/`else`** becomes a condition only when the `if` pins properties to a `const` or an
+  `enum` (optionally with a `required` list, read as "once this is filled in"). An `if` with anything
+  else in it is ignored as a whole rather than half-applied.
+- **Exclusive bounds** stay exclusive: `"exclusiveMinimum": 0` is "greater than 0", not "at least
+  0.000000001", and it exports as `exclusiveMinimum` again.
+- **Typed choices** keep their type: an `enum` of integers, numbers or booleans gives the field a
+  `ValueType`, so choosing "2" stores the number 2 and the export says `"type":"integer"`.
+- **`format`** adds the matching rule as well as the input type — `email`, `uri` and `uuid` (which is
+  enforced alongside any `pattern` the document also gives).
+
+An array with no single item schema — no `items` at all, or the tuple form — still renders: each row is
+a text box.
 
 An array of a closed set of choices that may not repeat
 (`{"type":"array","uniqueItems":true,"items":{"enum":[…]}}`) imports as a multi-select rather than a
 repeater of dropdowns — the same rule react-jsonschema-form uses. Without `uniqueItems` the document
-is explicitly allowing the same value twice, which only a repeater can express, so it stays one.
+is explicitly allowing the same value twice, which only a repeater can express, so it stays one. A
+multi-select exports in that same standard shape — its choices on `items`, where every JSON Schema
+validator looks for them — and the older top-level `enum` spelling still imports.
 
 `anyOf`/`oneOf` is handled for the two shapes that describe a single control: a null union
 (`{"anyOf":[{"type":"string"},{"type":"null"}]}`) collapses to the branch it wraps, and a list of
-`const` branches with titles becomes a labelled select. A union of genuinely different *object* shapes
+`const` branches with titles (with or without a `{"type":"null"}` branch, and with or without `$ref`s)
+becomes a labelled select. A union of genuinely different *object* shapes
 describes a choice of subforms rather than a choice of values — it needs a selector and a form that
 swaps with it — so it is left alone rather than bound to a branch the document never committed to.
 
-Use `TryImport` when the schema comes from a user:
+Use `TryImport` when the schema comes from a user. Besides malformed JSON, it reports a document that
+is not a schema, and one that goes past a budget no real form comes near: 10,000 fields, objects and
+arrays nested 32 levels deep, `allOf` nested 64 levels deep, or 80,000 `allOf`/`$ref` merges. A few
+hundred bytes of `$ref`s can describe millions of fields, and those documents are refused rather than
+built:
 
 ```csharp
 if (BlazorFormJsonSchemaImporter.TryImport(json, out var definition, out var error))
@@ -178,7 +241,8 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 
 | Extension | Meaning |
 | --- | --- |
-| `x-widget` | Force a control: `textarea`, `radio`, `combobox`, `multiselect`, `tags`, `range`, `switch`, `file`, `static`, `hidden`, `array`, … A document that names its control is taken at its word; one that does not gets the friendliest default for the shape it describes. |
+| `x-widget` | Force a control: `select`, `textarea`, `radio`, `combobox`, `multiselect`, `tags`, `range`, `switch`, `file`, `static`, `hidden`, `array`, … A document that names its control is taken at its word; one that does not gets the friendliest default for the shape it describes. |
+| `x-allowCustom`, `x-enum` | A combobox that also accepts answers on no list. Its choices travel as `x-enum`, because `enum` means "one of these and nothing else" to every validator; a combobox with a plain `enum` is a closed choice and rejects anything else. |
 | `x-renderer` | A custom renderer key registered with `RegisterCustom`. |
 | `x-order`, `x-group`, `x-placeholder`, `x-autocomplete`, `x-inputMode`, `x-autofocus` | Field metadata. |
 | `x-columns`, `x-colSpan` | Grid layout. |
@@ -186,13 +250,13 @@ round-trips through `BlazorFormJsonSchemaExporter.Export(definition)`:
 | `x-updateOn`, `x-debounce` | When the value is written back. |
 | `x-step` | The control's granularity, as distinct from a `multipleOf` constraint. |
 | `x-accept`, `x-multiple`, `x-maxFileSize` | File upload constraints. |
-| `x-visibleWhen`, `x-disabledWhen`, `x-readOnlyWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. |
+| `x-visibleWhen`, `x-disabledWhen`, `x-readOnlyWhen`, `x-requiredWhen` | Conditions, as `{"field":…,"op":…,"value":…}` or `{"all":[…]}` / `{"any":[…]}`. `op` is an operator name (any case) and defaults to `Equals` when absent; a condition whose `op` names no operator, or a group with a member that cannot be read, is dropped as a whole rather than guessed at. |
 | `x-revalidateOn` | Paths whose change revalidates this field — the other half of a cross-field rule. |
 | `x-clearOnHide` | Clear the value when the field is hidden. |
 | `x-attributes`, `x-inputAttributes` | Renderer hints and extra HTML attributes. |
 | `x-steps` | Wizard steps, each with `id`, `title`, `fields` and an optional `visibleWhen`. |
 | `enumNames`, `x-enumGroups`, `x-enumDisabled` | Labels matching the `enum` values, the `<optgroup>` each belongs to, and the values that may not be chosen. |
-| `examples` | `<datalist>` suggestions. |
+| `examples` | `<datalist>` suggestions. A tag list's go on `items` with its per-tag `minLength`, `maxLength` and `pattern`. |
 
 Conditions, rules and renderer hints backed by code (`VisibleWhen(predicate)`, `Must`, `MustAsync`,
 `Computed`, `OnChange`, `Normalize`, a delegate stashed in `Attributes`) have no JSON form and are
@@ -231,11 +295,14 @@ debounced field, which is what debouncing is for:
 ```csharp
 .Field(x => x.Username, f => f
     .UpdateOnInput(debounceMilliseconds: 400)   // one write per pause, not one per character
-    .MustAsync(async ctx => await users.IsAvailableAsync((string?)ctx.Value ?? ""), "That username is taken."))
+    .MustAsync(async ctx => await users.IsAvailableAsync((string?)ctx.Value ?? "", ctx.CancellationToken),
+               "That username is taken."))
 ```
 
 `state.IsValidatingField(path)` reports the lookup while it is in flight, so a spinner goes beside
-*that* box rather than the whole form declaring itself busy.
+*that* box rather than the whole form declaring itself busy. A run that is superseded — the user typed
+again, pressed Next twice, reset the form — has its answer discarded, and `ctx.CancellationToken` is
+signalled so the lookup itself can stop.
 
 ### Rules that read another field
 
@@ -301,6 +368,9 @@ so a value typed past the picker is reported rather than quietly accepted:
 
 `[Range(typeof(DateTime), "2024-01-01", "2024-12-31")]` on a model means the same thing.
 
+A `DateTimeOffset` is shown on its own clock, and what the user types is given back the offset the
+value already had, so editing one never shifts it to another instant or another zone.
+
 Two details worth knowing:
 
 - **`Required()` on a checkbox means "must be ticked"** — the same thing HTML's own `required`
@@ -308,7 +378,12 @@ Two details worth knowing:
   perfectly good value.
 - **A value the model cannot accept is reported, not swallowed.** Typing `abc` into a field bound to
   an `int` leaves the model on its last valid value and raises a validation message naming the entry,
-  rather than silently discarding it on the next render.
+  rather than silently discarding it on the next render. A fraction offered to a whole-number field is
+  refused rather than rounded.
+- **`UniqueItems()` compares content.** Two rows are duplicates when they hold the same values — a
+  dictionary row by its keys and everything beneath them, a model row by its public *scalar*
+  properties (its navigation-style members are never read) — and numbers compare by value, so `1` and
+  `1.0m` are the same item while `"1"` and `1` are not.
 
 Rules that need the whole model live on the form:
 
@@ -421,9 +496,9 @@ saw those attributes — a JSON Schema document rendered over a typed model.
 
 A result naming one member lands on that field, one naming several puts the same complaint under each
 of them, and one naming none becomes a form-level message. `IValidatableObject.Validate` is called
-directly rather than through `Validator.TryValidateObject`, which skips it entirely once any property
-attribute has failed — the user would otherwise fix the last required field, submit again, and be told
-about something new.
+directly, exactly once per pass, rather than through `Validator.TryValidateObject`, which skips it
+entirely once any property attribute has failed — the user would otherwise fix the last required
+field, submit again, and be told about something new.
 
 ### FluentValidation
 
@@ -474,7 +549,9 @@ that has been sent, a field the approver owns:
 Reach for it rather than `DisabledWhen` whenever the value still matters to the person reading the
 form. A disabled control leaves the tab order and is not announced at all, so "the invoice has been
 sent, here is its reference" becomes a value a keyboard or screen-reader user cannot get to;
-read-only keeps it reachable, readable and copyable.
+read-only keeps it reachable, readable and copyable. On an object or a repeater, `ReadOnly` /
+`ReadOnlyWhen` makes everything inside it read-only the same way; a read-only repeater also locks its
+add, remove and reorder buttons.
 
 `ClearOnHide` empties the value as soon as the field disappears, so a branch the user abandoned
 never contributes data to the submitted model.
@@ -536,7 +613,8 @@ Options can be loaded on demand and refreshed when another field changes:
 When `Country` changes the cached options are dropped and the now-invalid selection is cleared.
 Dependencies resolve against the object that owns the field before falling back to the root — exactly
 as conditions and computed dependencies do — so `dependsOn: "Country"` inside a repeater means *that
-row's* country, and naming a container (`dependsOn: "Address"`) covers everything inside it.
+row's* country, and naming a container (`dependsOn: "Address"`) covers everything inside it. The
+provider reads the same way: inside a repeater, `ctx.Value("Country")` is that row's country.
 
 A lookup that goes over the network fails for ordinary reasons, so a provider that throws is recorded
 rather than thrown: the control renders "options could not be loaded" instead of an empty dropdown, the
@@ -610,8 +688,9 @@ A list of short strings is a set of chips rather than a repeater:
 ```
 
 Enter or a comma adds one (`Attr("tagSeparators", ";")` changes the set), backspace on an empty box
-takes the last one back, and duplicates are refused case-insensitively. The entry box deliberately
-belongs to no form, so pressing Enter adds a tag instead of posting the page.
+takes the last one back, and duplicates are refused case-insensitively. A list loaded from storage
+that already holds a duplicate still renders, and × removes only the chip it is on. The entry box
+deliberately belongs to no form, so pressing Enter adds a tag instead of posting the page.
 
 ## Change handlers
 
@@ -682,8 +761,11 @@ at a time instead — they keep the schema's label, rules, conditions and ARIA w
 <button @onclick="() => _state.SubmitAsync(Save)">Raise ticket</button>
 ```
 
-An unknown path renders nothing, which is what a schema chosen at run time needs; set
-`ThrowIfMissing="true"` to catch a typo in a fixed layout.
+Each field follows the state by itself — its message, a condition, a list of options arriving — so the
+page only needs to subscribe to `StateChanged` for markup of its own that reads the state (an "unsaved
+changes" count, say). An unknown path renders nothing, which is what a schema chosen at run time needs;
+set `ThrowIfMissing="true"` to catch a typo in a fixed layout. Rendering the same schema twice on one page?
+Give each state its own `IdPrefix`.
 
 ## Field presentation
 
@@ -718,7 +800,11 @@ BlazorFormBuilder.For<Listing>()
 `UpdateOnInput` matters more than it looks: the browser's `change` event fires on *blur* for a text
 box, so without it the model does not see a keystroke until the user leaves the field. The `input`
 handler is only wired when a field actually needs it, so nothing pays for a round-trip per keystroke
-it has no use for.
+it has no use for. A debounced value never waits for its timer when it matters: leaving the box,
+pressing Enter (which submits, or moves a wizard on) and the control going away all write it first.
+
+`Clearable()` puts a × inside the box once it holds something, and puts the caret back in the box
+after clearing it.
 
 ## Checking a schema
 
@@ -752,22 +838,23 @@ key, rather than silently falling back to a text box.
 | --- | --- |
 | `Definition` | The schema to render. Required unless `State` is supplied. |
 | `Model` | Optional typed model to bind to. When omitted, a dictionary store is used. |
-| `Data` | Optional `IDictionary<string, object?>` backing store (used when `Model` is null). |
+| `Data` | Optional `IDictionary<string, object?>` backing store (used when `Model` is null). A writable dictionary is edited **in place** at every level — so don't share one (a static "defaults" dictionary, say) between forms or circuits; a read-only one is copied. Keys match without regard to case, typed nested containers keep their types, and values from `JsonSerializer.Deserialize<Dictionary<string, object?>>` are converted to plain dictionaries, lists and primitives as they are reached. |
 | `State` | Provide a pre-configured `BlazorFormState` (e.g. with FluentValidation wired up). |
 | `ConfigureState` | Runs against the state the view builds from `Definition`, before it renders — set the validation triggers, wire up a validator, subscribe to an event. Saves constructing and disposing a state by hand just to change one setting. |
 | `OnValidSubmit` | Raised with the state after a successful (valid) submit. |
 | `OnInvalidSubmit` | Raised after a submit that failed validation. |
 | `OnFieldChanged` | Raised with the path of a field whose value changed. |
-| `ReadOnly` | Renders every field read-only (review mode) and hides the buttons. |
+| `ReadOnly` | Renders every field read-only (review mode) and hides the buttons. Pressing Enter in a read-only form does not submit it. |
 | `Disabled` | Disables every field and button — a save in flight, a locked record. Unlike `ReadOnly` the fields cannot be tabbed through or read out, so reach for it only when the form is genuinely inoperable. |
 | `ShowSubmitButton` / `SubmitText` / `SubmittingText` | The built-in submit button (default `true` / `"Submit"`). While the form is validating or saving the button says so, rather than only going grey. |
 | `ShowResetButton` / `ResetText` | A button restoring the values the form started with. |
-| `ShowErrorSummary` | Lists every error above the form, each linking to its field. |
+| `ShowErrorSummary` | Lists every error above the form, each linking to its field — or to its step on a wizard. The links name the current page in full, so they work under any `<base href>`. |
 | `FocusFirstError` | Moves focus to the first invalid field after a failed submit (default `true`; suppressed while `ShowErrorSummary` is on, since the summary takes focus itself). |
 | `AllowStepNavigation` | Lets the user click back to a completed wizard step (default `true`). |
 | `BackText` / `NextText` | Wizard navigation labels. |
 | `Header` / `Footer` / `Actions` | Render fragments for extra content and a custom button row. |
 | `Class` | Extra CSS classes for the `<form>` element. |
+| `IdPrefix` | What every DOM id in the form starts with (default `ff_`). Give two forms on one page a prefix each. |
 | `ChildContent` | Extra content rendered inside the `<form>`. |
 
 Any other attribute you set is splatted onto the `<form>` element.
@@ -796,13 +883,13 @@ When you let the view build its own state from `Definition`, capture the compone
 | `GetFieldState(path)` | Touched, dirty, invalid, validating, the first error and every message for one field, in a single read. |
 | `NormalizeField(field, path)` / `NormalizeAll()` | Run the schema's normalizers. The built-in controls call these for you on blur and on submit. |
 | `SubmitAsync` | Marks everything touched, validates, and dispatches — ignoring re-entrant calls. |
-| `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones. `ValidateFieldAsync(path)` resolves the field from the schema for you. |
+| `ValidateAsync` / `ValidateStepAsync` / `ValidateFieldAsync` | Validation at three scopes; newer runs supersede older ones, and a superseded run reports false rather than a verdict it never reached. `ValidateFieldAsync(path)` resolves the field from the schema for you. |
 | `ValidateDependentsAsync(path)` | Revalidates every field that declared `RevalidateOn(path)`. The built-in controls call it for you; this is the hook for a custom one. |
 | `SingleErrorPerField` | Show a field's first error rather than every rule it breaks. Every rule still runs. |
 | `MessagesFor`, `AllMessages`, `OrderedMessages`, `SetServerError(s)` | Validation messages. |
 | `Reset()` / `Reset(values)` / `AcceptChanges` | Restore the starting values, rebase onto new ones, or make the current ones the new baseline. |
 | `Snapshot()` | Every bound path mapped onto its value — the shape `Reset(values)` takes back, so the two are a draft save and restore. |
-| `AddArrayItem`, `InsertArrayItem`, `DuplicateArrayItem`, `RemoveArrayItem`, `MoveArrayItem`, `SwapArrayItems`, `ClearArrayItems` | Repeater operations; messages, touched and dirty state follow their items. |
+| `AddArrayItem`, `InsertArrayItem`, `DuplicateArrayItem`, `RemoveArrayItem`, `MoveArrayItem`, `SwapArrayItems`, `ClearArrayItems` | Repeater operations; messages, touched and dirty state, rejected entries and loaded choices follow their items. A `T[]` property works too — it is replaced with a resized copy. |
 | `FocusAsync(path)` | Moves focus to the control rendering a path; false when nothing is rendering it. |
 | `Text(key, args)` | Resolves the library's own UI text through the registered message provider. |
 | `NextStepAsync`, `PreviousStep`, `GoToStep`, `VisibleSteps`, `CurrentStepNumber`, `FurthestStepIndex`, `IsStepReachable` | Wizard navigation. |

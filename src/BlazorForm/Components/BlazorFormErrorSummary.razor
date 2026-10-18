@@ -1,4 +1,8 @@
 @namespace BlazorForm
+@* Resolved optionally rather than injected: a host rendering outside a router — the static
+   HtmlRenderer, an email or PDF of the form — has no NavigationManager, and a summary that demanded one
+   threw where it used to render. *@
+@inject IServiceProvider Services
 
 @if (Messages.Count > 0)
 {
@@ -19,8 +23,14 @@
                     {
                         @* A real href, so the link behaves like one (middle-click, copy, right-click),
                            plus a click handler that moves focus for real — a fragment jump scrolls the
-                           control into view but does not always put the caret in it. *@
-                        <a href="@anchor" @onclick="@(() => FocusField(message.FieldPath))">@Describe(message)</a>
+                           control into view but does not always put the caret in it.
+
+                           The href names this page in full, and a plain click is kept from following it.
+                           A bare "#id" resolves against the document's <base href>, not the page: with
+                           the template's <base href="/">, on any form not at the root it pointed at the
+                           home page, and Blazor's router went there — taking the user, and everything
+                           they had typed, away from the form they were trying to fix. *@
+                        <a href="@anchor" @onclick="@(() => FocusField(message.FieldPath))" @onclick:preventDefault="true">@Describe(message)</a>
                     }
                     else
                     {
@@ -59,13 +69,36 @@
     // heading, the loop), so it is computed once when parameters change.
     private IReadOnlyList<BlazorFormValidationMessage> Messages => _messages;
 
+    private BlazorFormState? _state;
+
     protected override void OnParametersSet()
-        => _messages = ShowOnlyAfterSubmit && !State.IsSubmitted
+    {
+        // A view handed a new model builds a new state and keeps this component. What was remembered
+        // about the old one — which submit was already focused — means nothing for the new one, whose
+        // count starts again from zero: kept, it swallowed the new form's first failed submit.
+        if (!ReferenceEquals(_state, State))
+        {
+            _state = State;
+            _focusedForSubmitCount = 0;
+            _focusAfterRender = null;
+        }
+
+        _messages = ShowOnlyAfterSubmit && !State.IsSubmitted
             ? Array.Empty<BlazorFormValidationMessage>()
             : State.OrderedMessages().Where(m => m.Severity == BlazorFormValidationSeverity.Error).ToList();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // A link whose control was on another wizard step: the step is showing now, so the control is
+        // rendered and can take focus.
+        if (_focusAfterRender is { } pending)
+        {
+            _focusAfterRender = null;
+            await State.FocusAsync(pending);
+            return;
+        }
+
         if (!AutoFocus || Messages.Count == 0) return;
         // Once per submit attempt: re-focusing on every keystroke would trap the user in the summary.
         if (_focusedForSubmitCount == State.SubmitCount) return;
@@ -75,9 +108,9 @@
         {
             await _element.FocusAsync();
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or JSDisconnectedException or ObjectDisposedException)
         {
-            // No interactive circuit yet (static prerender) — nothing to focus.
+            // No interactive circuit yet (static prerender), or no longer one — nothing to focus.
         }
     }
 
@@ -85,7 +118,20 @@
         ? State.Text(BlazorFormMessageKeys.SummaryTitleOne)
         : State.Text(BlazorFormMessageKeys.SummaryTitleMany, Messages.Count);
 
-    private async Task FocusField(string path) => await State.FocusAsync(path);
+    private string? _focusAfterRender;
+
+    private async Task FocusField(string path)
+    {
+        if (await State.FocusAsync(path)) return;
+
+        // On a wizard the control may be on a step that is not showing, and so not rendered at all.
+        // The link would otherwise do nothing: show that step, and focus the control once it is there.
+        var step = State.VisibleStepContaining(path);
+        if (step < 0 || step == State.CurrentStepIndex) return;
+
+        _focusAfterRender = path;
+        State.GoToStep(step);
+    }
 
     private string Describe(BlazorFormValidationMessage message)
     {
@@ -124,14 +170,38 @@
     }
 
     /// <summary>
-    /// A fragment link to the offending control. Returns null for form-level messages, which have no
-    /// single control to jump to.
+    /// A link to the offending control on this page. Returns null for form-level messages, which have
+    /// no single control to jump to.
     /// </summary>
     private string? AnchorFor(string fieldPath)
     {
         if (string.IsNullOrEmpty(fieldPath)) return null;
         var field = State.Definition.FindByPath(fieldPath);
         if (field is null) return null;
-        return "#" + new BlazorFormFieldContext(State, field, fieldPath).ElementId;
+        return PageUri + "#" + new BlazorFormFieldContext(State, field, fieldPath).ElementId;
+    }
+
+    /// <summary>
+    /// The current page's address without its fragment — what a fragment link has to be built on for
+    /// it to stay on this page whatever the document's <c>&lt;base href&gt;</c> says. Empty when there
+    /// is no address to be had, which leaves a bare fragment rather than no link.
+    /// </summary>
+    private string PageUri
+    {
+        get
+        {
+            if (Services.GetService(typeof(NavigationManager)) is not NavigationManager navigation) return "";
+            try
+            {
+                var uri = navigation.Uri;
+                var hash = uri.IndexOf('#', StringComparison.Ordinal);
+                return hash < 0 ? uri : uri[..hash];
+            }
+            catch (InvalidOperationException)
+            {
+                // A host whose NavigationManager was never initialised.
+                return "";
+            }
+        }
     }
 }
