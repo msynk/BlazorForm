@@ -1,3 +1,5 @@
+**Note**: moved to bitplatform (https://borm.bitplatform.dev)
+
 # BlazorForm
 
 Schema-driven form engine for Blazor. Render forms from C# types or JSON Schema, with validation, conditional visibility, multi-step wizards, and array/repeater fields. The renderers are dependency-light HTML with a pluggable renderer registry, so you can swap in your own widgets.
